@@ -1,5 +1,4 @@
 import { BETHANY_SYSTEM_PROMPT, getContextualPrompt } from './personality';
-import Anthropic from '@anthropic-ai/sdk';
 
 interface Env {
   DB: D1Database;
@@ -19,53 +18,49 @@ interface BethanyState {
 export class Bethany implements DurableObject {
   private state: DurableObjectState;
   private env: Env;
-  private anthropic: Anthropic;
   private bethanyState: BethanyState;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
     this.env = env;
-    this.anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
     this.bethanyState = {
       isAvailable: true,
       lastInteraction: null,
       currentFocus: null
     };
+    
+    // Load state from storage
+    this.state.blockConcurrencyWhile(async () => {
+      const stored = await this.state.storage.get<BethanyState>('bethanyState');
+      if (stored) {
+        this.bethanyState = stored;
+      }
+    });
   }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-
+    
     if (url.pathname === '/sms' && request.method === 'POST') {
-      const body = await request.json() as { message: string };
-      await this.onSMS(body.message);
+      const data = await request.json() as { message: string };
+      await this.onSMS(data.message);
       return new Response('OK');
     }
-
+    
     if (url.pathname.startsWith('/rhythm/')) {
-      const rhythm = url.pathname.split('/')[2];
-      await this.runRhythm(rhythm);
+      const rhythm = url.pathname.replace('/rhythm/', '');
+      if (rhythm === 'morningBriefing') await this.morningBriefing();
+      if (rhythm === 'middayCheck') await this.middayCheck();
+      if (rhythm === 'eveningSynthesis') await this.eveningSynthesis();
+      if (rhythm === 'awarenessCheck') await this.awarenessCheck();
       return new Response('OK');
     }
-
+    
     return new Response('Not found', { status: 404 });
   }
 
-  async runRhythm(rhythm: string) {
-    switch (rhythm) {
-      case 'morningBriefing':
-        await this.morningBriefing();
-        break;
-      case 'middayCheck':
-        await this.middayCheck();
-        break;
-      case 'eveningSynthesis':
-        await this.eveningSynthesis();
-        break;
-      case 'awarenessCheck':
-        await this.awarenessCheck();
-        break;
-    }
+  private async saveState() {
+    await this.state.storage.put('bethanyState', this.bethanyState);
   }
 
   // ============================================
@@ -166,6 +161,7 @@ If something does, send a natural message.`;
         lowerMessage.includes('busy') ||
         lowerMessage.includes('going dark')) {
       this.bethanyState.isAvailable = false;
+      await this.saveState();
       const response = "Got it. I'll be here when you're back.";
       await this.logConversation('bethany', response);
       await this.sendSMS(response);
@@ -176,6 +172,7 @@ If something does, send a natural message.`;
         lowerMessage.includes('back now') ||
         lowerMessage.includes('available again')) {
       this.bethanyState.isAvailable = true;
+      await this.saveState();
     }
 
     // Gather context and respond
@@ -204,256 +201,31 @@ If something does, send a natural message.`;
       isAvailable: this.bethanyState.isAvailable
     });
 
-    const response = await this.anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1024,
-      system: BETHANY_SYSTEM_PROMPT + '\n\n' + contextualPrompt,
-      tools: this.getTools(),
-      messages: [
-        { role: 'user', content: input }
-      ]
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': this.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1024,
+        system: BETHANY_SYSTEM_PROMPT + '\n\n' + contextualPrompt,
+        messages: [
+          { role: 'user', content: input }
+        ]
+      })
     });
 
-    // Handle tool use if needed
-    if (response.stop_reason === 'tool_use') {
-      return await this.handleToolUse(response, input);
+    if (!response.ok) {
+      console.error('Claude API error:', await response.text());
+      return "Sorry, I'm having trouble thinking right now.";
     }
 
-    // Extract text response
-    const textBlock = response.content.find(block => block.type === 'text');
-    return textBlock ? (textBlock as any).text : "Hmm, lost my train of thought there.";
-  }
-
-  // ============================================
-  // TOOLS
-  // ============================================
-
-  getTools(): Anthropic.Tool[] {
-    return [
-      {
-        name: 'add_task',
-        description: 'Add a new task for Micaiah',
-        input_schema: {
-          type: 'object' as const,
-          properties: {
-            text: { type: 'string', description: 'The task description' },
-            category: { type: 'string', description: 'Category for the task' },
-            priority: { type: 'number', description: 'Priority 1-5' },
-            project: { type: 'string', description: 'Project to link to' }
-          },
-          required: ['text']
-        }
-      },
-      {
-        name: 'update_task',
-        description: 'Update an existing task (rephrase, reprioritize)',
-        input_schema: {
-          type: 'object' as const,
-          properties: {
-            task_id: { type: 'string' },
-            text: { type: 'string' },
-            priority: { type: 'number' },
-            category: { type: 'string' }
-          },
-          required: ['task_id']
-        }
-      },
-      {
-        name: 'complete_task',
-        description: 'Mark a task as complete',
-        input_schema: {
-          type: 'object' as const,
-          properties: {
-            task_id: { type: 'string' }
-          },
-          required: ['task_id']
-        }
-      },
-      {
-        name: 'log_contact',
-        description: 'Record that Micaiah connected with someone',
-        input_schema: {
-          type: 'object' as const,
-          properties: {
-            person_name: { type: 'string' },
-            notes: { type: 'string' }
-          },
-          required: ['person_name']
-        }
-      },
-      {
-        name: 'add_person',
-        description: 'Add a new person to track',
-        input_schema: {
-          type: 'object' as const,
-          properties: {
-            name: { type: 'string' },
-            relationship: { type: 'string' },
-            birthday: { type: 'string', description: 'MM-DD format' },
-            contact_frequency: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'quarterly'] }
-          },
-          required: ['name', 'relationship']
-        }
-      },
-      {
-        name: 'remember',
-        description: 'Store something Bethany learned about Micaiah',
-        input_schema: {
-          type: 'object' as const,
-          properties: {
-            category: { type: 'string', enum: ['preference', 'pattern', 'boundary', 'fact'] },
-            content: { type: 'string' },
-            source: { type: 'string', description: 'How you learned this' }
-          },
-          required: ['category', 'content']
-        }
-      },
-      {
-        name: 'queue_thought',
-        description: 'Queue something to bring up later',
-        input_schema: {
-          type: 'object' as const,
-          properties: {
-            type: { type: 'string', enum: ['nudge', 'question', 'reminder', 'thought'] },
-            content: { type: 'string' },
-            earliest_at: { type: 'string', description: 'ISO datetime' }
-          },
-          required: ['type', 'content']
-        }
-      }
-    ];
-  }
-
-  async handleToolUse(response: Anthropic.Message, originalInput: string): Promise<string> {
-    const toolUseBlocks = response.content.filter((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use');
-    const toolResults: Anthropic.ToolResultBlockParam[] = [];
-
-    for (const toolUse of toolUseBlocks) {
-      const result = await this.executeTool(toolUse.name, toolUse.input as any);
-      toolResults.push({
-        type: 'tool_result',
-        tool_use_id: toolUse.id,
-        content: JSON.stringify(result)
-      });
-    }
-
-    // Continue the conversation with tool results
-    const followUp = await this.anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1024,
-      system: BETHANY_SYSTEM_PROMPT,
-      messages: [
-        { role: 'user', content: originalInput },
-        { role: 'assistant', content: response.content },
-        { role: 'user', content: toolResults }
-      ]
-    });
-
-    const textBlock = followUp.content.find(block => block.type === 'text');
-    return textBlock ? (textBlock as any).text : "Done.";
-  }
-
-  async executeTool(name: string, input: any): Promise<any> {
-    switch (name) {
-      case 'add_task':
-        return await this.addTask(input);
-      case 'update_task':
-        return await this.updateTask(input);
-      case 'complete_task':
-        return await this.completeTask(input);
-      case 'log_contact':
-        return await this.logContact(input);
-      case 'add_person':
-        return await this.addPerson(input);
-      case 'remember':
-        return await this.remember(input);
-      case 'queue_thought':
-        return await this.queueThought(input);
-      default:
-        return { error: 'Unknown tool' };
-    }
-  }
-
-  // ============================================
-  // TOOL IMPLEMENTATIONS
-  // ============================================
-
-  async addTask(input: { text: string; category?: string; priority?: number; project?: string }) {
-    const id = crypto.randomUUID();
-    await this.env.DB.prepare(`
-      INSERT INTO tasks (id, text, category, priority, project, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, 'open', datetime('now'), datetime('now'))
-    `).bind(id, input.text, input.category || null, input.priority || 3, input.project || null).run();
-    
-    return { success: true, task_id: id };
-  }
-
-  async updateTask(input: { task_id: string; text?: string; priority?: number; category?: string }) {
-    const updates = [];
-    const values: any[] = [];
-    
-    if (input.text) { updates.push('text = ?'); values.push(input.text); }
-    if (input.priority) { updates.push('priority = ?'); values.push(input.priority); }
-    if (input.category) { updates.push('category = ?'); values.push(input.category); }
-    
-    if (updates.length === 0) return { success: false, error: 'No updates provided' };
-    
-    updates.push("updated_at = datetime('now')");
-    values.push(input.task_id);
-    
-    await this.env.DB.prepare(`
-      UPDATE tasks SET ${updates.join(', ')} WHERE id = ?
-    `).bind(...values).run();
-    
-    return { success: true };
-  }
-
-  async completeTask(input: { task_id: string }) {
-    await this.env.DB.prepare(`
-      UPDATE tasks SET status = 'done', completed_at = datetime('now'), updated_at = datetime('now')
-      WHERE id = ?
-    `).bind(input.task_id).run();
-    
-    return { success: true };
-  }
-
-  async logContact(input: { person_name: string; notes?: string }) {
-    await this.env.DB.prepare(`
-      UPDATE people SET last_contact = date('now'), updated_at = datetime('now')
-      WHERE lower(name) = lower(?)
-    `).bind(input.person_name).run();
-    
-    return { success: true };
-  }
-
-  async addPerson(input: { name: string; relationship: string; birthday?: string; contact_frequency?: string }) {
-    const id = crypto.randomUUID();
-    await this.env.DB.prepare(`
-      INSERT INTO people (id, name, relationship, birthday, contact_frequency, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-    `).bind(id, input.name, input.relationship, input.birthday || null, input.contact_frequency || 'weekly').run();
-    
-    return { success: true, person_id: id };
-  }
-
-  async remember(input: { category: string; content: string; source?: string }) {
-    const id = crypto.randomUUID();
-    await this.env.DB.prepare(`
-      INSERT INTO bethany_context (id, category, content, source, created_at)
-      VALUES (?, ?, ?, ?, datetime('now'))
-    `).bind(id, input.category, input.content, input.source || 'conversation').run();
-    
-    return { success: true };
-  }
-
-  async queueThought(input: { type: string; content: string; earliest_at?: string }) {
-    const id = crypto.randomUUID();
-    await this.env.DB.prepare(`
-      INSERT INTO bethany_queue (id, type, content, earliest_at, created_at)
-      VALUES (?, ?, ?, ?, datetime('now'))
-    `).bind(id, input.type, input.content, input.earliest_at || null).run();
-    
-    return { success: true };
+    const data = await response.json() as any;
+    const textBlock = data.content?.find((block: any) => block.type === 'text');
+    return textBlock ? textBlock.text : "Hmm, lost my train of thought there.";
   }
 
   // ============================================
@@ -560,10 +332,12 @@ If something does, send a natural message.`;
   async sendSMS(message: string) {
     const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${this.env.TWILIO_ACCOUNT_SID}/Messages.json`;
     
+    const auth = btoa(`${this.env.TWILIO_ACCOUNT_SID}:${this.env.TWILIO_AUTH_TOKEN}`);
+    
     const response = await fetch(twilioUrl, {
       method: 'POST',
       headers: {
-        'Authorization': 'Basic ' + btoa(`${this.env.TWILIO_ACCOUNT_SID}:${this.env.TWILIO_AUTH_TOKEN}`),
+        'Authorization': `Basic ${auth}`,
         'Content-Type': 'application/x-www-form-urlencoded'
       },
       body: new URLSearchParams({
