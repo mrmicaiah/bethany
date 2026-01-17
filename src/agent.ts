@@ -5,6 +5,7 @@ interface Env {
   ANTHROPIC_API_KEY: string;
   SENDBLUE_API_KEY: string;
   SENDBLUE_API_SECRET: string;
+  SENDBLUE_PHONE_NUMBER: string;
   MICAIAH_PHONE_NUMBER: string;
 }
 
@@ -353,7 +354,7 @@ If something does, send a natural message.`;
   // ============================================
 
   async sendMessage(message: string) {
-    console.log('sendMessage called, to:', this.env.MICAIAH_PHONE_NUMBER);
+    console.log('sendMessage called, to:', this.env.MICAIAH_PHONE_NUMBER, 'from:', this.env.SENDBLUE_PHONE_NUMBER);
     
     const response = await fetch('https://api.sendblue.co/api/send-message', {
       method: 'POST',
@@ -364,6 +365,7 @@ If something does, send a natural message.`;
       },
       body: JSON.stringify({
         number: this.env.MICAIAH_PHONE_NUMBER,
+        from_number: this.env.SENDBLUE_PHONE_NUMBER,
         content: message
       })
     });
