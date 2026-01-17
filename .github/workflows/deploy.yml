@@ -25,15 +25,3 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          secrets: |
-            ANTHROPIC_API_KEY
-            TWILIO_ACCOUNT_SID
-            TWILIO_AUTH_TOKEN
-            TWILIO_PHONE_NUMBER
-            MICAIAH_PHONE_NUMBER
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
-          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
-          TWILIO_PHONE_NUMBER: ${{ secrets.TWILIO_PHONE_NUMBER }}
-          MICAIAH_PHONE_NUMBER: ${{ secrets.MICAIAH_PHONE_NUMBER }}
