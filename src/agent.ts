@@ -7,6 +7,8 @@ interface Env {
   SENDBLUE_API_SECRET: string;
   SENDBLUE_PHONE_NUMBER: string;
   MICAIAH_PHONE_NUMBER: string;
+  MCP_API_URL: string;
+  MCP_API_KEY: string;
 }
 
 interface BethanyState {
@@ -608,6 +610,57 @@ Most of the time, [silent] is the right answer.`;
           properties: {}
         }
       },
+      // EMAIL
+      {
+        name: 'check_email',
+        description: "Check Micaiah's email inbox for unread messages",
+        input_schema: {
+          type: 'object',
+          properties: {
+            account: { type: 'string', enum: ['personal', 'company'], description: 'Which email account (default: personal)' },
+            max_results: { type: 'number', description: 'Max emails to return (default: 10)' }
+          }
+        }
+      },
+      {
+        name: 'read_email',
+        description: 'Read the full content of a specific email',
+        input_schema: {
+          type: 'object',
+          properties: {
+            message_id: { type: 'string', description: 'Email message ID from check_email' },
+            account: { type: 'string', enum: ['personal', 'company'], description: 'Which email account' }
+          },
+          required: ['message_id']
+        }
+      },
+      {
+        name: 'send_email',
+        description: 'Send an email on behalf of Micaiah',
+        input_schema: {
+          type: 'object',
+          properties: {
+            to: { type: 'string', description: 'Recipient email address' },
+            subject: { type: 'string', description: 'Email subject' },
+            body: { type: 'string', description: 'Email body text' },
+            account: { type: 'string', enum: ['personal', 'company'], description: 'Which account to send from (default: personal)' }
+          },
+          required: ['to', 'subject', 'body']
+        }
+      },
+      {
+        name: 'search_email',
+        description: 'Search emails with Gmail search syntax',
+        input_schema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Search query (Gmail syntax)' },
+            account: { type: 'string', enum: ['personal', 'company'], description: 'Which email account' },
+            max_results: { type: 'number', description: 'Max emails to return' }
+          },
+          required: ['query']
+        }
+      },
       // MEMORY
       {
         name: 'remember',
@@ -705,6 +758,12 @@ Most of the time, [silent] is the right answer.`;
         // MESSAGES
         case 'send_message': return await this.toolSendMessage(input);
         case 'check_messages': return await this.toolCheckMessages();
+        
+        // EMAIL (via MCP API)
+        case 'check_email': return await this.toolCheckEmail(input);
+        case 'read_email': return await this.toolReadEmail(input);
+        case 'send_email': return await this.toolSendEmail(input);
+        case 'search_email': return await this.toolSearchEmail(input);
         
         // MEMORY
         case 'remember': return await this.toolRemember(input);
@@ -1131,6 +1190,127 @@ Most of the time, [silent] is the right answer.`;
     `).all();
     
     return { messages: result.results, unread_count: result.results.length };
+  }
+
+  // EMAIL (via MCP API)
+  async toolCheckEmail(input: { account?: string; max_results?: number }) {
+    const account = input.account || 'personal';
+    const maxResults = input.max_results || 10;
+    
+    try {
+      const response = await fetch(
+        `${this.env.MCP_API_URL}/api/email/inbox?account=${account}&max_results=${maxResults}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.env.MCP_API_KEY}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
+      if (!response.ok) {
+        const error = await response.json() as any;
+        if (error.needs_auth) {
+          return { error: `${account} email not connected. Micaiah needs to connect it via the MCP server.` };
+        }
+        return { error: error.error || 'Failed to check email' };
+      }
+      
+      return await response.json();
+    } catch (error: any) {
+      console.error('Email check error:', error);
+      return { error: 'Failed to connect to email service' };
+    }
+  }
+
+  async toolReadEmail(input: { message_id: string; account?: string }) {
+    const account = input.account || 'personal';
+    
+    try {
+      const response = await fetch(
+        `${this.env.MCP_API_URL}/api/email/read?account=${account}&message_id=${input.message_id}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.env.MCP_API_KEY}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
+      if (!response.ok) {
+        const error = await response.json() as any;
+        return { error: error.error || 'Failed to read email' };
+      }
+      
+      return await response.json();
+    } catch (error: any) {
+      console.error('Email read error:', error);
+      return { error: 'Failed to connect to email service' };
+    }
+  }
+
+  async toolSendEmail(input: { to: string; subject: string; body: string; account?: string }) {
+    const account = input.account || 'personal';
+    
+    try {
+      const response = await fetch(
+        `${this.env.MCP_API_URL}/api/email/send`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.env.MCP_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            account,
+            to: input.to,
+            subject: input.subject,
+            body: input.body
+          })
+        }
+      );
+      
+      if (!response.ok) {
+        const error = await response.json() as any;
+        if (error.needs_auth) {
+          return { error: `${account} email not connected. Micaiah needs to connect it via the MCP server.` };
+        }
+        return { error: error.error || 'Failed to send email' };
+      }
+      
+      const result = await response.json() as any;
+      return { success: true, message: `Email sent to ${input.to}`, message_id: result.message_id };
+    } catch (error: any) {
+      console.error('Email send error:', error);
+      return { error: 'Failed to connect to email service' };
+    }
+  }
+
+  async toolSearchEmail(input: { query: string; account?: string; max_results?: number }) {
+    const account = input.account || 'personal';
+    const maxResults = input.max_results || 10;
+    
+    try {
+      const response = await fetch(
+        `${this.env.MCP_API_URL}/api/email/search?account=${account}&query=${encodeURIComponent(input.query)}&max_results=${maxResults}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.env.MCP_API_KEY}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
+      if (!response.ok) {
+        const error = await response.json() as any;
+        return { error: error.error || 'Failed to search email' };
+      }
+      
+      return await response.json();
+    } catch (error: any) {
+      console.error('Email search error:', error);
+      return { error: 'Failed to connect to email service' };
+    }
   }
 
   // MEMORY
