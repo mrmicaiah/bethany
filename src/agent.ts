@@ -3,9 +3,8 @@ import { BETHANY_SYSTEM_PROMPT, getContextualPrompt } from './personality';
 interface Env {
   DB: D1Database;
   ANTHROPIC_API_KEY: string;
-  TWILIO_ACCOUNT_SID: string;
-  TWILIO_AUTH_TOKEN: string;
-  TWILIO_PHONE_NUMBER: string;
+  SENDBLUE_API_KEY: string;
+  SENDBLUE_API_SECRET: string;
   MICAIAH_PHONE_NUMBER: string;
 }
 
@@ -29,7 +28,6 @@ export class Bethany implements DurableObject {
       currentFocus: null
     };
     
-    // Load state from storage
     this.state.blockConcurrencyWhile(async () => {
       const stored = await this.state.storage.get<BethanyState>('bethanyState');
       if (stored) {
@@ -45,8 +43,8 @@ export class Bethany implements DurableObject {
     try {
       if (url.pathname === '/sms' && request.method === 'POST') {
         const data = await request.json() as { message: string };
-        console.log('Processing SMS:', data.message);
-        await this.onSMS(data.message);
+        console.log('Processing message:', data.message);
+        await this.onMessage(data.message);
         return new Response('OK');
       }
       
@@ -90,7 +88,7 @@ Consider:
 Be natural. This isn't a report — it's you checking in.`;
 
     const response = await this.think(prompt, context);
-    await this.sendSMS(response);
+    await this.sendMessage(response);
   }
 
   async middayCheck() {
@@ -108,7 +106,7 @@ Only reach out if you have something worth saying. Silence is fine.`;
 
     const response = await this.think(prompt, context);
     if (response && response.toLowerCase() !== 'silent' && response.toLowerCase() !== '[silent]') {
-      await this.sendSMS(response);
+      await this.sendMessage(response);
     }
   }
 
@@ -128,7 +126,7 @@ Consider:
 Synthesize, don't list. Be a person reflecting on the day with him.`;
 
     const response = await this.think(prompt, context);
-    await this.sendSMS(response);
+    await this.sendMessage(response);
   }
 
   async awarenessCheck() {
@@ -150,7 +148,7 @@ If something does, send a natural message.`;
 
     const response = await this.think(prompt, context);
     if (response && !response.toLowerCase().includes('[silent]')) {
-      await this.sendSMS(response);
+      await this.sendMessage(response);
     }
   }
 
@@ -158,14 +156,12 @@ If something does, send a natural message.`;
   // INCOMING MESSAGES
   // ============================================
 
-  async onSMS(message: string) {
-    console.log('onSMS called with:', message);
+  async onMessage(message: string) {
+    console.log('onMessage called with:', message);
     
-    // Log the incoming message
     await this.logConversation('micaiah', message);
     console.log('Logged conversation');
     
-    // Check for availability signals
     const lowerMessage = message.toLowerCase();
     if (lowerMessage.includes('at dinner') || 
         lowerMessage.includes('taking the day off') ||
@@ -175,7 +171,7 @@ If something does, send a natural message.`;
       await this.saveState();
       const response = "Got it. I'll be here when you're back.";
       await this.logConversation('bethany', response);
-      await this.sendSMS(response);
+      await this.sendMessage(response);
       return;
     }
     
@@ -186,7 +182,6 @@ If something does, send a natural message.`;
       await this.saveState();
     }
 
-    // Gather context and respond
     console.log('Gathering context...');
     const context = await this.gatherContext();
     console.log('Context gathered, calling Claude...');
@@ -195,9 +190,9 @@ If something does, send a natural message.`;
     console.log('Claude response:', response);
     
     await this.logConversation('bethany', response);
-    console.log('Sending SMS...');
-    await this.sendSMS(response);
-    console.log('SMS sent');
+    console.log('Sending message...');
+    await this.sendMessage(response);
+    console.log('Message sent');
   }
 
   // ============================================
@@ -354,34 +349,30 @@ If something does, send a natural message.`;
   }
 
   // ============================================
-  // SMS (Twilio)
+  // iMessage via SendBlue
   // ============================================
 
-  async sendSMS(message: string) {
-    console.log('sendSMS called, to:', this.env.MICAIAH_PHONE_NUMBER, 'from:', this.env.TWILIO_PHONE_NUMBER);
+  async sendMessage(message: string) {
+    console.log('sendMessage called, to:', this.env.MICAIAH_PHONE_NUMBER);
     
-    const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${this.env.TWILIO_ACCOUNT_SID}/Messages.json`;
-    
-    const auth = btoa(`${this.env.TWILIO_ACCOUNT_SID}:${this.env.TWILIO_AUTH_TOKEN}`);
-    
-    const response = await fetch(twilioUrl, {
+    const response = await fetch('https://api.sendblue.co/api/send-message', {
       method: 'POST',
       headers: {
-        'Authorization': `Basic ${auth}`,
-        'Content-Type': 'application/x-www-form-urlencoded'
+        'Content-Type': 'application/json',
+        'sb-api-key-id': this.env.SENDBLUE_API_KEY,
+        'sb-api-secret-key': this.env.SENDBLUE_API_SECRET
       },
-      body: new URLSearchParams({
-        To: this.env.MICAIAH_PHONE_NUMBER,
-        From: this.env.TWILIO_PHONE_NUMBER,
-        Body: message
+      body: JSON.stringify({
+        number: this.env.MICAIAH_PHONE_NUMBER,
+        content: message
       })
     });
 
     const responseText = await response.text();
-    console.log('Twilio response:', response.status, responseText);
+    console.log('SendBlue response:', response.status, responseText);
     
     if (!response.ok) {
-      console.error('Failed to send SMS:', responseText);
+      console.error('Failed to send iMessage:', responseText);
     }
   }
 }
