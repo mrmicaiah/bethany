@@ -280,15 +280,16 @@ If something does, send a natural message.`;
 
   async getUpcomingBirthdays() {
     const result = await this.env.DB.prepare(`
-      SELECT *,
-        CASE 
-          WHEN strftime('%m-%d', 'now') <= birthday 
-          THEN julianday(strftime('%Y', 'now') || '-' || birthday) - julianday('now')
-          ELSE julianday(strftime('%Y', 'now', '+1 year') || '-' || birthday) - julianday('now')
-        END as days_until
-      FROM people 
-      WHERE birthday IS NOT NULL
-      HAVING days_until <= 14
+      SELECT * FROM (
+        SELECT *,
+          CASE 
+            WHEN strftime('%m-%d', 'now') <= birthday 
+            THEN julianday(strftime('%Y', 'now') || '-' || birthday) - julianday('now')
+            ELSE julianday(strftime('%Y', 'now', '+1 year') || '-' || birthday) - julianday('now')
+          END as days_until
+        FROM people 
+        WHERE birthday IS NOT NULL
+      ) WHERE days_until <= 14
       ORDER BY days_until ASC
     `).all();
     return result.results;
