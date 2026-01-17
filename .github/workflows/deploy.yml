@@ -17,22 +17,21 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Debug secrets
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "TOKEN IS EMPTY"
+          else
+            echo "TOKEN EXISTS, length: ${#CLOUDFLARE_API_TOKEN}"
+          fi
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
       - name: Install dependencies
         run: npm install
 
       - name: Deploy
         run: npx wrangler deploy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
-      - name: Set Secrets
-        run: |
-          echo "${{ secrets.ANTHROPIC_API_KEY }}" | npx wrangler secret put ANTHROPIC_API_KEY
-          echo "${{ secrets.TWILIO_ACCOUNT_SID }}" | npx wrangler secret put TWILIO_ACCOUNT_SID
-          echo "${{ secrets.TWILIO_AUTH_TOKEN }}" | npx wrangler secret put TWILIO_AUTH_TOKEN
-          echo "${{ secrets.TWILIO_PHONE_NUMBER }}" | npx wrangler secret put TWILIO_PHONE_NUMBER
-          echo "${{ secrets.MICAIAH_PHONE_NUMBER }}" | npx wrangler secret put MICAIAH_PHONE_NUMBER
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
