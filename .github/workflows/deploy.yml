@@ -17,21 +17,11 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Debug secrets
-        run: |
-          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-            echo "TOKEN IS EMPTY"
-          else
-            echo "TOKEN EXISTS, length: ${#CLOUDFLARE_API_TOKEN}"
-          fi
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-
       - name: Install dependencies
         run: npm install
 
       - name: Deploy
         run: npx wrangler deploy
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
