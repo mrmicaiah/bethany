@@ -6,6 +6,7 @@ interface Env {
   ANTHROPIC_API_KEY: string;
   SENDBLUE_API_KEY: string;
   SENDBLUE_API_SECRET: string;
+  SENDBLUE_PHONE_NUMBER: string;
   MICAIAH_PHONE_NUMBER: string;
 }
 
@@ -13,8 +14,8 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     
-    // Get the singleton Bethany instance
-    const id = env.BETHANY.idFromName('bethany-singleton');
+    // Get the singleton Bethany instance - v2 to force new instance
+    const id = env.BETHANY.idFromName('bethany-v2');
     const bethany = env.BETHANY.get(id);
 
     // SendBlue iMessage webhook
@@ -25,13 +26,11 @@ export default {
 
       console.log('iMessage from', from, ':', body);
 
-      // Verify it's from Micaiah
       if (from !== env.MICAIAH_PHONE_NUMBER) {
         console.log('iMessage from unknown number:', from);
         return new Response('OK');
       }
 
-      // Forward to Bethany DO
       ctx.waitUntil(
         bethany.fetch(new Request('https://bethany/sms', {
           method: 'POST',
@@ -43,7 +42,7 @@ export default {
       return new Response('OK');
     }
 
-    // Legacy Twilio SMS webhook (keep for compatibility)
+    // Legacy SMS webhook
     if (url.pathname === '/sms' && request.method === 'POST') {
       const contentType = request.headers.get('content-type') || '';
       
@@ -82,7 +81,7 @@ export default {
       });
     }
 
-    // Manual triggers for testing
+    // Manual triggers
     if (url.pathname === '/trigger/morning') {
       await bethany.fetch(new Request('https://bethany/rhythm/morningBriefing'));
       return new Response('Morning briefing triggered');
@@ -108,14 +107,11 @@ export default {
     return new Response('Not found', { status: 404 });
   },
 
-  // Scheduled triggers (cron)
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    const id = env.BETHANY.idFromName('bethany-singleton');
+    const id = env.BETHANY.idFromName('bethany-v2');
     const bethany = env.BETHANY.get(id);
 
     const hour = new Date().getUTCHours();
-    
-    // Convert to Eastern time (UTC-5)
     const easternHour = (hour - 5 + 24) % 24;
 
     if (easternHour === 6) {
