@@ -40,23 +40,31 @@ export class Bethany implements DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    console.log('Bethany DO received request:', url.pathname);
     
-    if (url.pathname === '/sms' && request.method === 'POST') {
-      const data = await request.json() as { message: string };
-      await this.onSMS(data.message);
-      return new Response('OK');
+    try {
+      if (url.pathname === '/sms' && request.method === 'POST') {
+        const data = await request.json() as { message: string };
+        console.log('Processing SMS:', data.message);
+        await this.onSMS(data.message);
+        return new Response('OK');
+      }
+      
+      if (url.pathname.startsWith('/rhythm/')) {
+        const rhythm = url.pathname.replace('/rhythm/', '');
+        console.log('Running rhythm:', rhythm);
+        if (rhythm === 'morningBriefing') await this.morningBriefing();
+        if (rhythm === 'middayCheck') await this.middayCheck();
+        if (rhythm === 'eveningSynthesis') await this.eveningSynthesis();
+        if (rhythm === 'awarenessCheck') await this.awarenessCheck();
+        return new Response('OK');
+      }
+      
+      return new Response('Not found', { status: 404 });
+    } catch (error) {
+      console.error('Error in Bethany DO:', error);
+      throw error;
     }
-    
-    if (url.pathname.startsWith('/rhythm/')) {
-      const rhythm = url.pathname.replace('/rhythm/', '');
-      if (rhythm === 'morningBriefing') await this.morningBriefing();
-      if (rhythm === 'middayCheck') await this.middayCheck();
-      if (rhythm === 'eveningSynthesis') await this.eveningSynthesis();
-      if (rhythm === 'awarenessCheck') await this.awarenessCheck();
-      return new Response('OK');
-    }
-    
-    return new Response('Not found', { status: 404 });
   }
 
   private async saveState() {
@@ -151,8 +159,11 @@ If something does, send a natural message.`;
   // ============================================
 
   async onSMS(message: string) {
+    console.log('onSMS called with:', message);
+    
     // Log the incoming message
     await this.logConversation('micaiah', message);
+    console.log('Logged conversation');
     
     // Check for availability signals
     const lowerMessage = message.toLowerCase();
@@ -176,11 +187,17 @@ If something does, send a natural message.`;
     }
 
     // Gather context and respond
+    console.log('Gathering context...');
     const context = await this.gatherContext();
+    console.log('Context gathered, calling Claude...');
+    
     const response = await this.think(message, context);
+    console.log('Claude response:', response);
     
     await this.logConversation('bethany', response);
+    console.log('Sending SMS...');
     await this.sendSMS(response);
+    console.log('SMS sent');
   }
 
   // ============================================
@@ -201,6 +218,7 @@ If something does, send a natural message.`;
       isAvailable: this.bethanyState.isAvailable
     });
 
+    console.log('Calling Claude API...');
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -218,12 +236,16 @@ If something does, send a natural message.`;
       })
     });
 
+    console.log('Claude API status:', response.status);
+    
     if (!response.ok) {
-      console.error('Claude API error:', await response.text());
+      const errorText = await response.text();
+      console.error('Claude API error:', errorText);
       return "Sorry, I'm having trouble thinking right now.";
     }
 
     const data = await response.json() as any;
+    console.log('Claude API response received');
     const textBlock = data.content?.find((block: any) => block.type === 'text');
     return textBlock ? textBlock.text : "Hmm, lost my train of thought there.";
   }
@@ -233,15 +255,20 @@ If something does, send a natural message.`;
   // ============================================
 
   async gatherContext() {
-    const [recentTasks, recentJournal, neglectedPeople, upcomingBirthdays, sprintStatus] = await Promise.all([
-      this.getRecentTasks(),
-      this.getRecentJournal(),
-      this.getNeglectedPeople(),
-      this.getUpcomingBirthdays(),
-      this.getSprintStatus()
-    ]);
+    try {
+      const [recentTasks, recentJournal, neglectedPeople, upcomingBirthdays, sprintStatus] = await Promise.all([
+        this.getRecentTasks(),
+        this.getRecentJournal(),
+        this.getNeglectedPeople(),
+        this.getUpcomingBirthdays(),
+        this.getSprintStatus()
+      ]);
 
-    return { recentTasks, recentJournal, neglectedPeople, upcomingBirthdays, sprintStatus };
+      return { recentTasks, recentJournal, neglectedPeople, upcomingBirthdays, sprintStatus };
+    } catch (error) {
+      console.error('Error gathering context:', error);
+      return { recentTasks: [], recentJournal: [], neglectedPeople: [], upcomingBirthdays: [], sprintStatus: null };
+    }
   }
 
   async getRecentTasks() {
@@ -331,6 +358,8 @@ If something does, send a natural message.`;
   // ============================================
 
   async sendSMS(message: string) {
+    console.log('sendSMS called, to:', this.env.MICAIAH_PHONE_NUMBER, 'from:', this.env.TWILIO_PHONE_NUMBER);
+    
     const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${this.env.TWILIO_ACCOUNT_SID}/Messages.json`;
     
     const auth = btoa(`${this.env.TWILIO_ACCOUNT_SID}:${this.env.TWILIO_AUTH_TOKEN}`);
@@ -348,8 +377,11 @@ If something does, send a natural message.`;
       })
     });
 
+    const responseText = await response.text();
+    console.log('Twilio response:', response.status, responseText);
+    
     if (!response.ok) {
-      console.error('Failed to send SMS:', await response.text());
+      console.error('Failed to send SMS:', responseText);
     }
   }
 }
