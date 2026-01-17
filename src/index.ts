@@ -14,8 +14,8 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     
-    // Get the singleton Bethany instance - v2 to force new instance
-    const id = env.BETHANY.idFromName('bethany-v2');
+    // Get the singleton Bethany instance - v3 with warmer personality
+    const id = env.BETHANY.idFromName('bethany-v3');
     const bethany = env.BETHANY.get(id);
 
     // SendBlue iMessage webhook
@@ -108,7 +108,7 @@ export default {
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    const id = env.BETHANY.idFromName('bethany-v2');
+    const id = env.BETHANY.idFromName('bethany-v3');
     const bethany = env.BETHANY.get(id);
 
     const hour = new Date().getUTCHours();
