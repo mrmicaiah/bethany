@@ -1,4 +1,3 @@
-import { Agent, AgentContext } from 'agents';
 import { BETHANY_SYSTEM_PROMPT, getContextualPrompt } from './personality';
 import Anthropic from '@anthropic-ai/sdk';
 
@@ -15,32 +14,58 @@ interface BethanyState {
   isAvailable: boolean;
   lastInteraction: string | null;
   currentFocus: string | null;
-  pendingThoughts: string[];
 }
 
-export class Bethany extends Agent<Env, BethanyState> {
-  
+export class Bethany implements DurableObject {
+  private state: DurableObjectState;
+  private env: Env;
   private anthropic: Anthropic;
-  
-  constructor(ctx: AgentContext, env: Env) {
-    super(ctx, env);
-    this.anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
-  }
+  private bethanyState: BethanyState;
 
-  // Initialize state and schedules
-  async onStart() {
-    this.setState({
+  constructor(state: DurableObjectState, env: Env) {
+    this.state = state;
+    this.env = env;
+    this.anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+    this.bethanyState = {
       isAvailable: true,
       lastInteraction: null,
-      currentFocus: null,
-      pendingThoughts: []
-    });
+      currentFocus: null
+    };
+  }
 
-    // Her rhythms
-    this.schedule('weekdays at 6:30am', 'morningBriefing');
-    this.schedule('weekdays at 12:00pm', 'middayCheck');
-    this.schedule('weekdays at 6:00pm', 'eveningSynthesis');
-    this.schedule('every 2 hours', 'awarenessCheck');
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+
+    if (url.pathname === '/sms' && request.method === 'POST') {
+      const body = await request.json() as { message: string };
+      await this.onSMS(body.message);
+      return new Response('OK');
+    }
+
+    if (url.pathname.startsWith('/rhythm/')) {
+      const rhythm = url.pathname.split('/')[2];
+      await this.runRhythm(rhythm);
+      return new Response('OK');
+    }
+
+    return new Response('Not found', { status: 404 });
+  }
+
+  async runRhythm(rhythm: string) {
+    switch (rhythm) {
+      case 'morningBriefing':
+        await this.morningBriefing();
+        break;
+      case 'middayCheck':
+        await this.middayCheck();
+        break;
+      case 'eveningSynthesis':
+        await this.eveningSynthesis();
+        break;
+      case 'awarenessCheck':
+        await this.awarenessCheck();
+        break;
+    }
   }
 
   // ============================================
@@ -48,7 +73,7 @@ export class Bethany extends Agent<Env, BethanyState> {
   // ============================================
 
   async morningBriefing() {
-    if (!this.state.isAvailable) return;
+    if (!this.bethanyState.isAvailable) return;
     
     const context = await this.gatherContext();
     const prompt = `It's morning. Review Micaiah's day ahead and reach out with something useful. 
@@ -66,7 +91,7 @@ Be natural. This isn't a report — it's you checking in.`;
   }
 
   async middayCheck() {
-    if (!this.state.isAvailable) return;
+    if (!this.bethanyState.isAvailable) return;
     
     const context = await this.gatherContext();
     const prompt = `It's midday. Check in on how Micaiah's day is going.
@@ -85,7 +110,7 @@ Only reach out if you have something worth saying. Silence is fine.`;
   }
 
   async eveningSynthesis() {
-    if (!this.state.isAvailable) return;
+    if (!this.bethanyState.isAvailable) return;
     
     const context = await this.gatherContext();
     const prompt = `It's end of day. Help Micaiah close out.
@@ -104,7 +129,7 @@ Synthesize, don't list. Be a person reflecting on the day with him.`;
   }
 
   async awarenessCheck() {
-    if (!this.state.isAvailable) return;
+    if (!this.bethanyState.isAvailable) return;
     
     const context = await this.gatherContext();
     const prompt = `Background awareness check. Look at what's going on and decide if you should reach out.
@@ -140,7 +165,7 @@ If something does, send a natural message.`;
         lowerMessage.includes('taking the day off') ||
         lowerMessage.includes('busy') ||
         lowerMessage.includes('going dark')) {
-      this.setState({ ...this.state, isAvailable: false });
+      this.bethanyState.isAvailable = false;
       const response = "Got it. I'll be here when you're back.";
       await this.logConversation('bethany', response);
       await this.sendSMS(response);
@@ -150,7 +175,7 @@ If something does, send a natural message.`;
     if (lowerMessage.includes("i'm back") || 
         lowerMessage.includes('back now') ||
         lowerMessage.includes('available again')) {
-      this.setState({ ...this.state, isAvailable: true });
+      this.bethanyState.isAvailable = true;
     }
 
     // Gather context and respond
@@ -159,9 +184,6 @@ If something does, send a natural message.`;
     
     await this.logConversation('bethany', response);
     await this.sendSMS(response);
-    
-    // Process any actions she decided to take
-    await this.processActions(response);
   }
 
   // ============================================
@@ -179,7 +201,7 @@ If something does, send a natural message.`;
       upcomingBirthdays: context.upcomingBirthdays,
       sprintStatus: context.sprintStatus,
       lastConversation: recentConversation,
-      isAvailable: this.state.isAvailable
+      isAvailable: this.bethanyState.isAvailable
     });
 
     const response = await this.anthropic.messages.create({
@@ -194,25 +216,25 @@ If something does, send a natural message.`;
 
     // Handle tool use if needed
     if (response.stop_reason === 'tool_use') {
-      return await this.handleToolUse(response, input, context);
+      return await this.handleToolUse(response, input);
     }
 
     // Extract text response
     const textBlock = response.content.find(block => block.type === 'text');
-    return textBlock ? textBlock.text : "Hmm, lost my train of thought there.";
+    return textBlock ? (textBlock as any).text : "Hmm, lost my train of thought there.";
   }
 
   // ============================================
   // TOOLS
   // ============================================
 
-  getTools() {
+  getTools(): Anthropic.Tool[] {
     return [
       {
         name: 'add_task',
         description: 'Add a new task for Micaiah',
         input_schema: {
-          type: 'object',
+          type: 'object' as const,
           properties: {
             text: { type: 'string', description: 'The task description' },
             category: { type: 'string', description: 'Category for the task' },
@@ -226,7 +248,7 @@ If something does, send a natural message.`;
         name: 'update_task',
         description: 'Update an existing task (rephrase, reprioritize)',
         input_schema: {
-          type: 'object',
+          type: 'object' as const,
           properties: {
             task_id: { type: 'string' },
             text: { type: 'string' },
@@ -240,7 +262,7 @@ If something does, send a natural message.`;
         name: 'complete_task',
         description: 'Mark a task as complete',
         input_schema: {
-          type: 'object',
+          type: 'object' as const,
           properties: {
             task_id: { type: 'string' }
           },
@@ -251,7 +273,7 @@ If something does, send a natural message.`;
         name: 'log_contact',
         description: 'Record that Micaiah connected with someone',
         input_schema: {
-          type: 'object',
+          type: 'object' as const,
           properties: {
             person_name: { type: 'string' },
             notes: { type: 'string' }
@@ -263,7 +285,7 @@ If something does, send a natural message.`;
         name: 'add_person',
         description: 'Add a new person to track',
         input_schema: {
-          type: 'object',
+          type: 'object' as const,
           properties: {
             name: { type: 'string' },
             relationship: { type: 'string' },
@@ -277,7 +299,7 @@ If something does, send a natural message.`;
         name: 'remember',
         description: 'Store something Bethany learned about Micaiah',
         input_schema: {
-          type: 'object',
+          type: 'object' as const,
           properties: {
             category: { type: 'string', enum: ['preference', 'pattern', 'boundary', 'fact'] },
             content: { type: 'string' },
@@ -290,7 +312,7 @@ If something does, send a natural message.`;
         name: 'queue_thought',
         description: 'Queue something to bring up later',
         input_schema: {
-          type: 'object',
+          type: 'object' as const,
           properties: {
             type: { type: 'string', enum: ['nudge', 'question', 'reminder', 'thought'] },
             content: { type: 'string' },
@@ -302,12 +324,12 @@ If something does, send a natural message.`;
     ];
   }
 
-  async handleToolUse(response: any, originalInput: string, context: any): Promise<string> {
-    const toolUseBlocks = response.content.filter((block: any) => block.type === 'tool_use');
-    const toolResults = [];
+  async handleToolUse(response: Anthropic.Message, originalInput: string): Promise<string> {
+    const toolUseBlocks = response.content.filter((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use');
+    const toolResults: Anthropic.ToolResultBlockParam[] = [];
 
     for (const toolUse of toolUseBlocks) {
-      const result = await this.executeTool(toolUse.name, toolUse.input);
+      const result = await this.executeTool(toolUse.name, toolUse.input as any);
       toolResults.push({
         type: 'tool_result',
         tool_use_id: toolUse.id,
@@ -327,8 +349,8 @@ If something does, send a natural message.`;
       ]
     });
 
-    const textBlock = followUp.content.find((block: any) => block.type === 'text');
-    return textBlock ? textBlock.text : "Done.";
+    const textBlock = followUp.content.find(block => block.type === 'text');
+    return textBlock ? (textBlock as any).text : "Done.";
   }
 
   async executeTool(name: string, input: any): Promise<any> {
@@ -368,7 +390,7 @@ If something does, send a natural message.`;
 
   async updateTask(input: { task_id: string; text?: string; priority?: number; category?: string }) {
     const updates = [];
-    const values = [];
+    const values: any[] = [];
     
     if (input.text) { updates.push('text = ?'); values.push(input.text); }
     if (input.priority) { updates.push('priority = ?'); values.push(input.priority); }
@@ -554,14 +576,5 @@ If something does, send a natural message.`;
     if (!response.ok) {
       console.error('Failed to send SMS:', await response.text());
     }
-  }
-
-  // ============================================
-  // PROCESS ACTIONS (from her responses)
-  // ============================================
-
-  async processActions(response: string) {
-    // If she mentions learning something, she might want to remember it
-    // This is a hook for future intelligence about self-directed learning
   }
 }
