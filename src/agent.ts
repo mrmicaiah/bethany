@@ -814,7 +814,7 @@ Most of the time, [silent] is the right answer.`;
   async toolAddTask(input: { text: string; category?: string; priority?: number; project?: string; due_date?: string; is_active?: boolean }) {
     const id = crypto.randomUUID();
     await this.env.DB.prepare(`
-      INSERT INTO tasks (id, text, category, priority, project, due_date, status, is_active, created_at, updated_at, user_id)
+      INSERT INTO tasks (id, text, category, priority, project, due_date, status, is_active, created_at, last_touched, user_id)
       VALUES (?, ?, ?, ?, ?, ?, 'open', ?, datetime('now'), datetime('now'), 'micaiah')
     `).bind(
       id, 
@@ -842,7 +842,7 @@ Most of the time, [silent] is the right answer.`;
     if (!taskId) return { error: 'Task not found' };
     
     await this.env.DB.prepare(`
-      UPDATE tasks SET status = 'done', completed_at = datetime('now'), updated_at = datetime('now')
+      UPDATE tasks SET status = 'done', completed_at = datetime('now'), last_touched = datetime('now')
       WHERE id = ?
     `).bind(taskId).run();
     
@@ -860,7 +860,7 @@ Most of the time, [silent] is the right answer.`;
     
     if (updates.length === 0) return { error: 'No updates provided' };
     
-    updates.push("updated_at = datetime('now')");
+    updates.push("last_touched = datetime('now')");
     params.push(input.task_id);
     
     await this.env.DB.prepare(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`).bind(...params).run();
@@ -880,7 +880,7 @@ Most of the time, [silent] is the right answer.`;
     if (!taskId) return { error: 'Task not found' };
     
     await this.env.DB.prepare(
-      "UPDATE tasks SET is_active = 1, updated_at = datetime('now') WHERE id = ?"
+      "UPDATE tasks SET is_active = 1, last_touched = datetime('now') WHERE id = ?"
     ).bind(taskId).run();
     
     return { success: true, message: 'Task added to active list' };
@@ -899,7 +899,7 @@ Most of the time, [silent] is the right answer.`;
     if (!taskId) return { error: 'Task not found' };
     
     await this.env.DB.prepare(
-      "UPDATE tasks SET is_active = 0, updated_at = datetime('now') WHERE id = ?"
+      "UPDATE tasks SET is_active = 0, last_touched = datetime('now') WHERE id = ?"
     ).bind(taskId).run();
     
     return { success: true, message: 'Task removed from active list' };
@@ -946,8 +946,8 @@ Most of the time, [silent] is the right answer.`;
   async toolCreateProject(input: { title: string; purpose?: string; goal?: string; target_date?: string }) {
     const id = crypto.randomUUID();
     await this.env.DB.prepare(`
-      INSERT INTO projects (id, title, purpose, goal, target_date, status, created_at, updated_at, user_id)
-      VALUES (?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'), 'micaiah')
+      INSERT INTO projects (id, title, purpose, goal, target_date, status, created_at, user_id)
+      VALUES (?, ?, ?, ?, ?, 'active', datetime('now'), 'micaiah')
     `).bind(id, input.title, input.purpose || null, input.goal || null, input.target_date || null).run();
     
     return { success: true, project_id: id, message: `Created project: "${input.title}"` };
@@ -967,8 +967,8 @@ Most of the time, [silent] is the right answer.`;
   async toolAddJournalEntry(input: { content: string; mood?: string; energy?: number; entry_type?: string }) {
     const id = crypto.randomUUID();
     await this.env.DB.prepare(`
-      INSERT INTO journal_entries (id, content, mood, energy, entry_type, created_at, updated_at, user_id)
-      VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'), 'micaiah')
+      INSERT INTO journal_entries (id, content, mood, energy, entry_type, created_at, user_id)
+      VALUES (?, ?, ?, ?, ?, datetime('now'), 'micaiah')
     `).bind(id, input.content, input.mood || null, input.energy || null, input.entry_type || 'freeform').run();
     
     return { success: true, entry_id: id, message: 'Journal entry added' };
@@ -1011,7 +1011,7 @@ Most of the time, [silent] is the right answer.`;
     
     if (!sprint) return { error: 'No active sprint found' };
     
-    const objectives = await this.env.DB.prepare('SELECT * FROM sprint_objectives WHERE sprint_id = ?').bind(sprint.id).all();
+    const objectives = await this.env.DB.prepare('SELECT * FROM objectives WHERE sprint_id = ?').bind(sprint.id).all();
     const tasks = await this.env.DB.prepare('SELECT * FROM tasks WHERE sprint_id = ? AND status = ?').bind(sprint.id, 'open').all();
     
     return { sprint, objectives: objectives.results, tasks: tasks.results };
@@ -1029,7 +1029,7 @@ Most of the time, [silent] is the right answer.`;
     
     const id = crypto.randomUUID();
     await this.env.DB.prepare(`
-      INSERT INTO sprint_objectives (id, sprint_id, statement, status, created_at)
+      INSERT INTO objectives (id, sprint_id, statement, status, created_at)
       VALUES (?, ?, ?, 'active', datetime('now'))
     `).bind(id, sprintId, input.statement).run();
     
@@ -1052,7 +1052,7 @@ Most of the time, [silent] is the right answer.`;
     if (!sprint) return { error: 'No active sprint found' };
     
     await this.env.DB.prepare(`
-      UPDATE tasks SET sprint_id = ?, sprint_objective_id = ?, updated_at = datetime('now')
+      UPDATE tasks SET sprint_id = ?, objective_id = ?, last_touched = datetime('now')
       WHERE id = ?
     `).bind(sprint.id, input.objective_id || null, taskId).run();
     
@@ -1071,8 +1071,8 @@ Most of the time, [silent] is the right answer.`;
   async toolAddPerson(input: { name: string; relationship: string; birthday?: string; contact_frequency?: string }) {
     const id = crypto.randomUUID();
     await this.env.DB.prepare(`
-      INSERT INTO people (id, name, relationship, birthday, contact_frequency, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+      INSERT INTO people (id, name, relationship, birthday, contact_frequency, created_at)
+      VALUES (?, ?, ?, ?, ?, datetime('now'))
     `).bind(id, input.name, input.relationship, input.birthday || null, input.contact_frequency || 'weekly').run();
     
     return { success: true, person_id: id, message: `Added ${input.name}` };
@@ -1080,7 +1080,7 @@ Most of the time, [silent] is the right answer.`;
 
   async toolLogContact(input: { person_name: string; notes?: string }) {
     await this.env.DB.prepare(`
-      UPDATE people SET last_contact = date('now'), updated_at = datetime('now')
+      UPDATE people SET last_contact = date('now')
       WHERE lower(name) = lower(?)
     `).bind(input.person_name).run();
     
@@ -1111,15 +1111,15 @@ Most of the time, [silent] is the right answer.`;
   async toolAddIdea(input: { title: string; content?: string; category?: string }) {
     const id = crypto.randomUUID();
     await this.env.DB.prepare(`
-      INSERT INTO ideas (id, title, content, category, status, created_at, updated_at, user_id)
-      VALUES (?, ?, ?, ?, 'raw', datetime('now'), datetime('now'), 'micaiah')
+      INSERT INTO incubation (id, title, content, category, status, created_at, user_id)
+      VALUES (?, ?, ?, ?, 'raw', datetime('now'), 'micaiah')
     `).bind(id, input.title, input.content || null, input.category || 'Unsorted').run();
     
     return { success: true, idea_id: id, message: `Captured idea: "${input.title}"` };
   }
 
   async toolListIdeas(input: { category?: string }) {
-    let query = 'SELECT * FROM ideas';
+    let query = 'SELECT * FROM incubation';
     const params: any[] = [];
     
     if (input.category) {
@@ -1137,8 +1137,8 @@ Most of the time, [silent] is the right answer.`;
   async toolAddNote(input: { title: string; content?: string; category?: string }) {
     const id = crypto.randomUUID();
     await this.env.DB.prepare(`
-      INSERT INTO notes (id, title, content, category, created_at, updated_at, user_id)
-      VALUES (?, ?, ?, ?, datetime('now'), datetime('now'), 'micaiah')
+      INSERT INTO notes (id, title, content, category, created_at, user_id)
+      VALUES (?, ?, ?, ?, datetime('now'), 'micaiah')
     `).bind(id, input.title, input.content || '', input.category || 'General').run();
     
     return { success: true, note_id: id, message: `Added note: "${input.title}"` };
@@ -1175,8 +1175,8 @@ Most of the time, [silent] is the right answer.`;
   async toolSendMessage(input: { message: string }) {
     const id = crypto.randomUUID();
     await this.env.DB.prepare(`
-      INSERT INTO team_messages (id, from_user, to_user, message, read, created_at)
-      VALUES (?, 'micaiah', 'irene', ?, 0, datetime('now'))
+      INSERT INTO messages (id, from_user, to_user, content, created_at)
+      VALUES (?, 'micaiah', 'irene', ?, datetime('now'))
     `).bind(id, input.message).run();
     
     return { success: true, message: 'Message sent to Irene' };
@@ -1184,8 +1184,8 @@ Most of the time, [silent] is the right answer.`;
 
   async toolCheckMessages() {
     const result = await this.env.DB.prepare(`
-      SELECT * FROM team_messages 
-      WHERE to_user = 'micaiah' AND read = 0
+      SELECT * FROM messages 
+      WHERE to_user = 'micaiah' AND read_at IS NULL
       ORDER BY created_at DESC
     `).all();
     
