@@ -4,9 +4,8 @@ interface Env {
   DB: D1Database;
   BETHANY: DurableObjectNamespace;
   ANTHROPIC_API_KEY: string;
-  TWILIO_ACCOUNT_SID: string;
-  TWILIO_AUTH_TOKEN: string;
-  TWILIO_PHONE_NUMBER: string;
+  SENDBLUE_API_KEY: string;
+  SENDBLUE_API_SECRET: string;
   MICAIAH_PHONE_NUMBER: string;
 }
 
@@ -18,20 +17,18 @@ export default {
     const id = env.BETHANY.idFromName('bethany-singleton');
     const bethany = env.BETHANY.get(id);
 
-    // Twilio SMS webhook
-    if (url.pathname === '/sms' && request.method === 'POST') {
-      const formData = await request.formData();
-      const from = formData.get('From') as string;
-      const body = formData.get('Body') as string;
+    // SendBlue iMessage webhook
+    if (url.pathname === '/imessage' && request.method === 'POST') {
+      const data = await request.json() as any;
+      const from = data.from_number || data.number;
+      const body = data.content || data.message || data.text;
 
-      console.log('SMS from', from, ':', body);
+      console.log('iMessage from', from, ':', body);
 
       // Verify it's from Micaiah
       if (from !== env.MICAIAH_PHONE_NUMBER) {
-        console.log('SMS from unknown number:', from);
-        return new Response('<?xml version="1.0" encoding="UTF-8"?><Response></Response>', {
-          headers: { 'Content-Type': 'text/xml' }
-        });
+        console.log('iMessage from unknown number:', from);
+        return new Response('OK');
       }
 
       // Forward to Bethany DO
@@ -43,7 +40,43 @@ export default {
         }))
       );
 
-      // Return empty TwiML (we'll respond async)
+      return new Response('OK');
+    }
+
+    // Legacy Twilio SMS webhook (keep for compatibility)
+    if (url.pathname === '/sms' && request.method === 'POST') {
+      const contentType = request.headers.get('content-type') || '';
+      
+      let from: string;
+      let body: string;
+      
+      if (contentType.includes('application/x-www-form-urlencoded')) {
+        const formData = await request.formData();
+        from = formData.get('From') as string;
+        body = formData.get('Body') as string;
+      } else {
+        const data = await request.json() as any;
+        from = data.from_number || data.From;
+        body = data.content || data.Body;
+      }
+
+      console.log('SMS from', from, ':', body);
+
+      if (from !== env.MICAIAH_PHONE_NUMBER) {
+        console.log('SMS from unknown number:', from);
+        return new Response('<?xml version="1.0" encoding="UTF-8"?><Response></Response>', {
+          headers: { 'Content-Type': 'text/xml' }
+        });
+      }
+
+      ctx.waitUntil(
+        bethany.fetch(new Request('https://bethany/sms', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: body })
+        }))
+      );
+
       return new Response('<?xml version="1.0" encoding="UTF-8"?><Response></Response>', {
         headers: { 'Content-Type': 'text/xml' }
       });
@@ -86,16 +119,12 @@ export default {
     const easternHour = (hour - 5 + 24) % 24;
 
     if (easternHour === 6) {
-      // 6:30 AM Eastern - morning briefing
       await bethany.fetch(new Request('https://bethany/rhythm/morningBriefing'));
     } else if (easternHour === 12) {
-      // 12 PM Eastern - midday check
       await bethany.fetch(new Request('https://bethany/rhythm/middayCheck'));
     } else if (easternHour === 18) {
-      // 6 PM Eastern - evening synthesis
       await bethany.fetch(new Request('https://bethany/rhythm/eveningSynthesis'));
     } else if (easternHour % 2 === 0) {
-      // Every 2 hours - awareness check
       await bethany.fetch(new Request('https://bethany/rhythm/awarenessCheck'));
     }
   }
