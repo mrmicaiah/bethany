@@ -1,0 +1,21 @@
+{
+  "name": "bethany",
+  "version": "1.0.0",
+  "description": "Bethany - Strategic life partner",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate": "wrangler d1 execute productivity --file=./schema.sql",
+    "tail": "wrangler tail"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.0",
+    "agents": "^0.3.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241127.0",
+    "typescript": "^5.3.0",
+    "wrangler": "^3.91.0"
+  }
+}
