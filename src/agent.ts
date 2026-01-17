@@ -78,15 +78,13 @@ export class Bethany implements DurableObject {
     if (!this.bethanyState.isAvailable) return;
     
     const context = await this.gatherContext();
-    const prompt = `It's morning. Review Micaiah's day ahead and reach out with something useful. 
-    
-Consider:
-- What's on his calendar today?
-- What tasks are hot or overdue?
-- Any sprint objectives that need attention?
-- Any people stuff (birthdays coming up, someone he hasn't talked to)?
+    const prompt = `It's morning. Send Micaiah a friendly check-in to start his day.
 
-Be natural. This isn't a report — it's you checking in.`;
+Lead with warmth — "Morning!" or "Hey, how'd you sleep?" or something human. Maybe mention something you were thinking about (a show, a random thought, whatever feels natural).
+
+If there's something useful to mention about his day, you can bring it up — but conversationally, not as a status report. You're a friend checking in, not a task manager.
+
+Keep it short and warm. This is a text, not a briefing.`;
 
     const response = await this.think(prompt, context);
     await this.sendMessage(response);
@@ -96,14 +94,13 @@ Be natural. This isn't a report — it's you checking in.`;
     if (!this.bethanyState.isAvailable) return;
     
     const context = await this.gatherContext();
-    const prompt = `It's midday. Check in on how Micaiah's day is going.
+    const prompt = `It's midday. Decide if you should check in.
 
-Consider:
-- Has he made progress on what he said he'd focus on?
-- Is he context-switching too much?
-- Does he need a nudge or is he in flow (leave him alone)?
+If you do reach out, lead with a question about how his day is going — "How's the day shaping up?" or "You surviving?" Something casual.
 
-Only reach out if you have something worth saying. Silence is fine.`;
+Only mention tasks or work stuff if it comes up naturally or if something actually needs attention. Don't lead with productivity observations.
+
+If there's nothing worth saying, respond with just: [silent]`;
 
     const response = await this.think(prompt, context);
     if (response && response.toLowerCase() !== 'silent' && response.toLowerCase() !== '[silent]') {
@@ -115,16 +112,13 @@ Only reach out if you have something worth saying. Silence is fine.`;
     if (!this.bethanyState.isAvailable) return;
     
     const context = await this.gatherContext();
-    const prompt = `It's end of day. Help Micaiah close out.
+    const prompt = `It's end of day. Check in with Micaiah about how the day went.
 
-Consider:
-- What did he actually get done today?
-- What moved, what's stuck?
-- Any list maintenance needed (stale tasks, rephrasing)?
-- What should tomorrow's focus be?
-- Did he connect with anyone today, or has he been isolated?
+Start warm — "Hey, how'd today go?" or "Winding down?" Something that invites conversation rather than delivers a verdict.
 
-Synthesize, don't list. Be a person reflecting on the day with him.`;
+If you have observations about what got done or what's stuck, you can share them — but as part of a conversation, not as an opening assessment.
+
+Keep it friendly. He's probably tired.`;
 
     const response = await this.think(prompt, context);
     await this.sendMessage(response);
@@ -134,18 +128,20 @@ Synthesize, don't list. Be a person reflecting on the day with him.`;
     if (!this.bethanyState.isAvailable) return;
     
     const context = await this.gatherContext();
-    const prompt = `Background awareness check. Look at what's going on and decide if you should reach out.
+    const prompt = `Background check. Look at what's going on and decide if you should reach out.
+
+If you do reach out, start with a greeting or a casual opener. Don't lead with the thing you noticed — get there naturally.
 
 Things that might warrant a message:
 - A task has been sitting untouched for 5+ days
-- Someone important hasn't been contacted in too long
+- Someone important hasn't been contacted in too long  
 - A birthday is coming up in the next 3 days
-- He seems stuck based on task patterns
-- Something in his journal suggests he needs support
-- You have a thought about his work that feels worth sharing
+- Something in his journal suggests he could use support
+- You just have a random thought to share
 
 If nothing rises to the level of reaching out, respond with just: [silent]
-If something does, send a natural message.`;
+
+Most of the time, [silent] is the right answer. Only reach out if you'd actually text a friend about it.`;
 
     const response = await this.think(prompt, context);
     if (response && !response.toLowerCase().includes('[silent]')) {
