@@ -66,18 +66,108 @@ export interface WritingStatus {
 }
 
 // ============================================
-// CRAFT TYPES
+// DETAILED STYLE GUIDE TYPE
 // ============================================
 
-export interface StyleGuide {
-  voice: string[];
-  pov_preference: string;
-  sentence_rhythm: string;
-  dialogue_style: string;
-  things_i_do: string[];
-  things_i_avoid: string[];
-  influences: string[];
-  signature_moves: string[];
+export interface DetailedStyleGuide {
+  voice: {
+    core_quality: string;
+    tone: string;
+    emotional_register: string;
+  };
+  prose_style: {
+    sentence_rhythm: {
+      pattern: string;
+      short_sentences: string;
+      long_sentences: string;
+      fragments: string;
+    };
+    word_choice: {
+      principle: string;
+      avoid: string;
+      dialogue_tags: string;
+    };
+    paragraph_structure: {
+      principle: string;
+      interiority: string;
+    };
+  };
+  pov_and_tense: {
+    default: string;
+    dual_pov: string;
+    close_third: string;
+    head_hopping: string;
+  };
+  dialogue: {
+    principle: string;
+    subtext: string;
+    banter: {
+      rhythm: string;
+      function: string;
+      balance: string;
+    };
+    tension_in_dialogue: string;
+    avoid: {
+      exposition_dumps: string;
+      on_the_nose: string;
+      uniform_voice: string;
+    };
+  };
+  emotional_beats: {
+    building: string;
+    earning_moments: string;
+    the_gut_punch: string;
+    aftermath: string;
+  };
+  tension_and_pacing: {
+    romantic_tension: {
+      proximity: string;
+      interruption: string;
+      awareness: string;
+      denial: string;
+    };
+    scene_pacing: {
+      enter_late_leave_early: string;
+      chapter_endings: string;
+      chapter_openings: string;
+    };
+  };
+  writing_heat: {
+    philosophy: string;
+    building_to_it: string;
+    during: {
+      stay_in_pov: string;
+      sensory_specific: string;
+      dialogue: string;
+      emotion: string;
+    };
+    avoid: {
+      purple_prose: string;
+      mechanical: string;
+      out_of_character: string;
+    };
+  };
+  character_work: {
+    interiority: string;
+    wounds: string;
+    flaws: string;
+    desire_vs_need: string;
+    growth: string;
+  };
+  structure: {
+    opening: string;
+    first_act: string;
+    midpoint: string;
+    dark_moment: string;
+    resolution: string;
+  };
+  signature_techniques: {
+    the_callback: string;
+    the_list: string;
+    the_pivot: string;
+    the_mirror: string;
+    the_specificity: string;
+  };
 }
 
 export interface RomanceBeats {
@@ -126,47 +216,6 @@ export async function initializeLibrary(bucket: R2Bucket): Promise<void> {
     last_updated: now,
   };
 
-  // Initialize style guide
-  const styleGuide: StyleGuide = {
-    voice: [
-      'Intimate and confessional — like the reader is inside her head',
-      'Witty internal monologue that masks vulnerability',
-      'Sensory details that ground emotional moments',
-      'Dialogue that crackles with subtext',
-    ],
-    pov_preference: 'First person, deep POV. Dual POV for romance (alternating chapters).',
-    sentence_rhythm: 'Mix of punchy short sentences for impact and longer flowing ones for emotion. Fragment sentences for emphasis. Let the rhythm match the emotional beat.',
-    dialogue_style: 'Banter-forward. Characters talk around what they mean. Tension lives in what\'s not said. Interruptions. Unfinished sentences. Real people don\'t speak in complete thoughts.',
-    things_i_do: [
-      'Start chapters with a hook — action, thought, or dialogue',
-      'End chapters on micro-cliffhangers or emotional turns',
-      'Use the body to show emotion (tight chest, held breath, heat)',
-      'Let silence do work in dialogue scenes',
-      'Earn the emotional payoff with buildup',
-    ],
-    things_i_avoid: [
-      'Adverbs in dialogue tags — "he said angrily" is lazy',
-      'Info dumps — weave backstory through action',
-      'Perfect characters — flaws make them real',
-      'Rushed resolutions — the dark moment needs weight',
-      'Purple prose in sex scenes — specific and honest beats flowery',
-    ],
-    influences: [
-      'Colleen Hoover — emotional gut punches, conversational intimacy',
-      'Emily Henry — banter that builds tension, smart humor',
-      'Taylor Jenkins Reid — complex women, nonlinear storytelling',
-      'Christina Lauren — heat and humor in balance',
-      'Sally Rooney — dialogue as character revelation',
-    ],
-    signature_moves: [
-      'The callback — small detail from early pays off big later',
-      'The almost-kiss that gets interrupted',
-      'Internal monologue during a charged silence',
-      'The vulnerable admission disguised as a joke',
-      'Weather/setting that mirrors emotional state',
-    ],
-  };
-
   // Initialize romance beats
   const romanceBeats: RomanceBeats = {
     meet_cute: 'Friction first. They don\'t like each other, or circumstances are wrong. The attraction is inconvenient. Something forces proximity.',
@@ -199,15 +248,29 @@ export async function initializeLibrary(bucket: R2Bucket): Promise<void> {
         name: 'Margot Chen',
         role: 'protagonist',
         age: '32',
-        description: 'Literary agent in NYC. Sharp, guarded, still carrying the weight of leaving. Hasn\'t been home in a decade.',
-        arc: 'Learning that running from pain doesn\'t heal it. Opening up again.',
+        description: 'Literary agent in NYC. Sharp, guarded, still carrying the weight of leaving. Hasn\'t been home in a decade. Uses sarcasm as armor. Workaholic who\'s forgotten what she actually wants.',
+        arc: 'Learning that running from pain doesn\'t heal it. Opening up again. Choosing to stay instead of flee.',
       },
       {
         name: 'Eli Vance',
         role: 'love_interest',
         age: '34',
-        description: 'Estate attorney who stayed in their small town. Steady, patient, but with his own buried anger about being left behind.',
-        arc: 'Confronting whether staying was strength or fear. Choosing to risk again.',
+        description: 'Estate attorney who stayed in their small town. Steady, patient exterior masking buried anger about being left behind. Builds furniture in his spare time. Never got over her.',
+        arc: 'Confronting whether staying was strength or fear. Letting go of resentment. Risking heartbreak again.',
+      },
+      {
+        name: 'June Chen',
+        role: 'supporting',
+        age: '68',
+        description: 'Margot\'s mother. Keeper of secrets. Knows more about why Margot really left than she lets on.',
+        arc: 'Revealing the truth. Letting her daughter make her own choices.',
+      },
+      {
+        name: 'Ben Vance',
+        role: 'supporting',
+        age: '30',
+        description: 'Eli\'s younger brother. Bartender. Comic relief but with depth. Was a kid when Margot left, sees the situation more clearly than either lead.',
+        arc: 'Catalyst for truth-telling. Forces the leads to confront their bullshit.',
       },
     ],
     last_updated: now,
@@ -217,11 +280,17 @@ export async function initializeLibrary(bucket: R2Bucket): Promise<void> {
   await Promise.all([
     bucket.put(`${WRITING_PREFIX}/status.json`, JSON.stringify(status, null, 2)),
     bucket.put(`${IDEAS_PREFIX}/sparks.json`, JSON.stringify(ideas, null, 2)),
-    bucket.put(`${CRAFT_PREFIX}/style-guide.json`, JSON.stringify(styleGuide, null, 2)),
     bucket.put(`${CRAFT_PREFIX}/romance-beats.json`, JSON.stringify(romanceBeats, null, 2)),
     bucket.put(`${LIBRARY_PREFIX}/whiskey-and-regret/metadata.json`, JSON.stringify(firstBook, null, 2)),
     bucket.put(`${LIBRARY_PREFIX}/whiskey-and-regret/characters.json`, JSON.stringify(firstBookCharacters, null, 2)),
   ]);
+
+  // Load and save the detailed style guide
+  const styleGuide = await fetch('https://raw.githubusercontent.com/mrmicaiah/bethany/main/src/craft/style-guide-detailed.json');
+  if (styleGuide.ok) {
+    const styleData = await styleGuide.text();
+    await bucket.put(`${CRAFT_PREFIX}/style-guide.json`, styleData);
+  }
 
   console.log('Library initialized');
 }
@@ -240,7 +309,7 @@ export async function updateWritingStatus(bucket: R2Bucket, updates: Partial<Wri
   await bucket.put(`${WRITING_PREFIX}/status.json`, JSON.stringify(updated, null, 2));
 }
 
-export async function getStyleGuide(bucket: R2Bucket): Promise<StyleGuide | null> {
+export async function getStyleGuide(bucket: R2Bucket): Promise<DetailedStyleGuide | null> {
   const obj = await bucket.get(`${CRAFT_PREFIX}/style-guide.json`);
   if (!obj) return null;
   return JSON.parse(await obj.text());
@@ -425,4 +494,59 @@ export async function getRandomExcerpt(bucket: R2Bucket, maxLength: number = 500
     excerpt: excerpt.trim(),
     source: `${book.title}, Chapter ${chapter.number}`,
   };
+}
+
+// ============================================
+// FORMAT STYLE GUIDE FOR WRITING PROMPT
+// ============================================
+
+export function formatStyleGuideForWriting(style: DetailedStyleGuide): string {
+  return `## YOUR WRITING VOICE
+
+**Core Quality**: ${style.voice.core_quality}
+**Tone**: ${style.voice.tone}
+**Emotional Register**: ${style.voice.emotional_register}
+
+## PROSE MECHANICS
+
+**Sentence Rhythm**: ${style.prose_style.sentence_rhythm.pattern}
+- Short sentences: ${style.prose_style.sentence_rhythm.short_sentences}
+- Fragments: ${style.prose_style.sentence_rhythm.fragments}
+
+**Word Choice**: ${style.prose_style.word_choice.principle}
+**Avoid**: ${style.prose_style.word_choice.avoid}
+
+**POV**: ${style.pov_and_tense.default}
+
+## DIALOGUE
+
+${style.dialogue.principle}
+**Subtext**: ${style.dialogue.subtext}
+**Banter**: ${style.dialogue.banter.rhythm}
+**Tension**: ${style.dialogue.tension_in_dialogue}
+
+## EMOTIONAL BEATS
+
+**Building**: ${style.emotional_beats.building}
+**The Gut Punch**: ${style.emotional_beats.the_gut_punch}
+**Aftermath**: ${style.emotional_beats.aftermath}
+
+## ROMANTIC TENSION
+
+**Proximity**: ${style.tension_and_pacing.romantic_tension.proximity}
+**Interruption**: ${style.tension_and_pacing.romantic_tension.interruption}
+**Denial**: ${style.tension_and_pacing.romantic_tension.denial}
+
+## SCENE PACING
+
+**Enter Late, Leave Early**: ${style.tension_and_pacing.scene_pacing.enter_late_leave_early}
+**Chapter Endings**: ${style.tension_and_pacing.scene_pacing.chapter_endings}
+**Chapter Openings**: ${style.tension_and_pacing.scene_pacing.chapter_openings}
+
+## SIGNATURE TECHNIQUES
+
+- **The Callback**: ${style.signature_techniques.the_callback}
+- **The List**: ${style.signature_techniques.the_list}
+- **The Pivot**: ${style.signature_techniques.the_pivot}
+- **The Specificity**: ${style.signature_techniques.the_specificity}`;
 }
