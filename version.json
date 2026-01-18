@@ -1,0 +1,19 @@
+{
+  "version": "0.14.0",
+  "updated": "2026-01-18",
+  "codename": "voice-update",
+  "features": [
+    "gap-triggered-outreach",
+    "session-archive-5mo",
+    "ai-session-titles",
+    "anna-kendrick-voice",
+    "natural-emojis"
+  ],
+  "changelog": [
+    "0.14.0 - Voice mechanics overhaul (Anna Kendrick style), natural emoji usage",
+    "0.13.0 - Gap-triggered proactive outreach (replaces fixed schedules), max 3/day",
+    "0.12.0 - Session archive system with AI-generated titles, 5-month retention",
+    "0.11.0 - Verbatim transcript retrieval via [pull_session:]",
+    "0.10.0 - Session management with 4-hour gap threshold"
+  ]
+}
