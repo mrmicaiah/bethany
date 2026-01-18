@@ -28,6 +28,11 @@ import {
   Session,
   SessionCheckResult
 } from './sessions';
+import {
+  initializeTextingVoice,
+  getTextingVoice,
+  TextingVoice
+} from './voice';
 
 interface Env {
   DB: D1Database;
@@ -46,6 +51,7 @@ interface BethanyState {
   lastInteraction: string | null;
   memoryInitialized: boolean;
   libraryInitialized: boolean;
+  voiceInitialized: boolean;
   // Proactive outreach tracking
   outreachesToday: number;
   lastOutreachDate: string | null;  // YYYY-MM-DD
@@ -64,6 +70,7 @@ export class Bethany implements DurableObject {
       lastInteraction: null,
       memoryInitialized: false,
       libraryInitialized: false,
+      voiceInitialized: false,
       outreachesToday: 0,
       lastOutreachDate: null,
     };
@@ -94,6 +101,14 @@ export class Bethany implements DurableObject {
         console.log('Initializing library...');
         await initializeLibrary(this.env.MEMORY);
         this.bethanyState.libraryInitialized = true;
+        await this.saveState();
+      }
+      
+      // Initialize texting voice if needed
+      if (!this.bethanyState.voiceInitialized) {
+        console.log('Initializing texting voice...');
+        await initializeTextingVoice(this.env.MEMORY);
+        this.bethanyState.voiceInitialized = true;
         await this.saveState();
       }
       
@@ -150,6 +165,14 @@ export class Bethany implements DurableObject {
           lastOutreachDate: this.bethanyState.lastOutreachDate,
           isAvailable: this.bethanyState.isAvailable,
         }, null, 2), { headers: { 'Content-Type': 'application/json' } });
+      }
+      
+      // Debug endpoint to check texting voice
+      if (url.pathname === '/debug/voice') {
+        const voice = await getTextingVoice(this.env.MEMORY);
+        return new Response(JSON.stringify(voice, null, 2), { 
+          headers: { 'Content-Type': 'application/json' } 
+        });
       }
       
       return new Response('Not found', { status: 404 });
@@ -660,6 +683,37 @@ Now that you've read the transcript, respond naturally. You can reference specif
   }
 
   // ============================================
+  // FORMAT TEXTING VOICE FOR CONTEXT
+  // ============================================
+
+  formatTextingVoiceForContext(voice: TextingVoice): string {
+    return `## YOUR TEXTING VOICE
+
+**Presence**: ${voice.overall_vibe.presence}
+**Energy**: ${voice.overall_vibe.energy}
+**Warmth**: ${voice.overall_vibe.warmth}
+
+**Sentence Length**: ${voice.sentence_patterns.length}
+**Fragments**: ${voice.sentence_patterns.fragments}
+
+**Punctuation**: ${voice.punctuation_and_caps.periods} ${voice.punctuation_and_caps.capitalization}
+**Exclamation marks**: ${voice.punctuation_and_caps.exclamation}
+
+**Word Choice**: ${voice.word_choice.vocabulary}
+**Contractions**: ${voice.word_choice.contractions}
+**Swearing**: ${voice.word_choice.swearing}
+
+**Showing Affection**: ${voice.emotional_expression.affection}
+**Teasing**: ${voice.emotional_expression.teasing}
+**Vulnerability**: ${voice.emotional_expression.vulnerability}
+
+**Response Timing**: ${voice.conversational_flow.response_timing}
+**Callbacks**: ${voice.conversational_flow.callbacks}
+
+**AVOID**: ${voice.things_to_avoid.over_enthusiasm} ${voice.things_to_avoid.generic} ${voice.things_to_avoid.trying_too_hard}`;
+  }
+
+  // ============================================
   // THINKING (Claude API with Session Memory)
   // ============================================
 
@@ -671,6 +725,13 @@ Now that you've read the transcript, respond naturally. You can reference specif
     let memoryContext = '';
     if (hotMemory) {
       memoryContext = formatMemoryForContext(hotMemory, people);
+    }
+    
+    // Load texting voice
+    const textingVoice = await getTextingVoice(this.env.MEMORY);
+    let voiceContext = '';
+    if (textingVoice) {
+      voiceContext = this.formatTextingVoiceForContext(textingVoice);
     }
     
     // Get writing status for context
@@ -695,8 +756,8 @@ Now that you've read the transcript, respond naturally. You can reference specif
       sessionList: sessionList,
     });
 
-    // Build full system prompt
-    const fullSystemPrompt = BETHANY_SYSTEM_PROMPT + '\n\n' + memoryContext + writingContext + '\n\n' + contextualPrompt + `\n\n## This conversation:\n${sessionContext}`;
+    // Build full system prompt with voice guide
+    const fullSystemPrompt = BETHANY_SYSTEM_PROMPT + '\n\n' + voiceContext + '\n\n' + memoryContext + writingContext + '\n\n' + contextualPrompt + `\n\n## This conversation:\n${sessionContext}`;
 
     const messages: any[] = [{ role: 'user', content: input }];
     
