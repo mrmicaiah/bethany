@@ -1,0 +1,109 @@
+{
+  "voice": {
+    "core_quality": "Intimate and confessional. The reader is inside the character's head, privy to thoughts they wouldn't say out loud. Vulnerability masked by wit.",
+    "tone": "Warm but sharp. Humor that deflects from pain. Sarcasm as armor. The jokes land but there's always something underneath.",
+    "emotional_register": "Big feelings treated with specificity. Not 'she was sad' but the exact texture of that sadness — what it tastes like, where it sits in the body, what memory it triggers."
+  },
+  
+  "prose_style": {
+    "sentence_rhythm": {
+      "pattern": "Variation is everything. Long flowing sentences for emotion and interiority. Short punchy ones for impact. Fragments for emphasis. The rhythm follows the emotional beat.",
+      "short_sentences": "Use for: gut punches, realizations, tension, humor. 'He was here. He was actually here.' or 'Well. Shit.'",
+      "long_sentences": "Use for: building atmosphere, deep POV, sensory immersion, the character spiraling in their own head.",
+      "fragments": "Use sparingly but deliberately. 'The way he looked at me. Like I was the answer to something.' Fragments create pause. Weight."
+    },
+    "word_choice": {
+      "principle": "Specific beats generic. 'Coffee' is fine. 'The burnt dregs of the office Keurig' is better. Details that do double duty — reveal character while grounding scene.",
+      "avoid": "Purple prose. Flowery language. Thesaurus words that pull the reader out. If you wouldn't think the word, your character wouldn't either.",
+      "dialogue_tags": "Said is invisible. Use it. Avoid adverbs in tags — 'angrily' is lazy. Show the anger in the words or the action."
+    },
+    "paragraph_structure": {
+      "principle": "White space is pacing. Short paragraphs speed things up. Longer ones slow down. A one-line paragraph is a spotlight.",
+      "interiority": "Internal monologue can run long but break it up. Action, thought, action. Don't let the character spiral for three paragraphs without something happening."
+    }
+  },
+  
+  "pov_and_tense": {
+    "default": "First person, past tense. Deep POV — we're in their head completely.",
+    "dual_pov": "For romance, alternate between leads. Each voice must be distinct — different cadence, different fixations, different humor.",
+    "close_third": "If using third person, stay close. Limited omniscience. We know only what the POV character knows.",
+    "head_hopping": "Never. One POV per scene minimum, ideally per chapter."
+  },
+  
+  "dialogue": {
+    "principle": "Dialogue is action. Every line should do at least two things — reveal character, advance plot, build tension, establish relationship dynamics.",
+    "subtext": "What's not said matters more than what is. Characters talk around the thing. They deflect. They change the subject. Real people rarely say exactly what they mean.",
+    "banter": {
+      "rhythm": "Quick volleys. Interruptions. Unfinished sentences. '—' is your friend.",
+      "function": "Banter builds intimacy while maintaining distance. It's foreplay. The joke is never just a joke.",
+      "balance": "Banter needs contrast. If every exchange is witty, none of them land. Earn the humor with moments of sincerity."
+    },
+    "tension_in_dialogue": "Pauses. 'He didn't answer.' What someone doesn't say. Eye contact held too long. The moment before speaking.",
+    "avoid": {
+      "exposition_dumps": "No character explains things both people already know.",
+      "on_the_nose": "If the reader can predict exactly what someone will say, it's too obvious.",
+      "uniform_voice": "Every character should sound different. Vocabulary, rhythm, what they notice."
+    }
+  },
+  
+  "emotional_beats": {
+    "building": "Emotion needs setup. The payoff works because of what came before. Plant the wound early. Let it fester. Then press on it.",
+    "earning_moments": "Big emotional moments must be earned. The reader needs to want it before you give it to them. Delay gratification.",
+    "the_gut_punch": "Comes from specificity. Not 'she missed him' but the specific thing that triggers the missing — his coffee mug still in the cabinet, the indent on his side of the bed.",
+    "aftermath": "Don't skip the aftermath. The moment after the kiss. The morning after. The drive home. Quiet beats where characters process."
+  },
+  
+  "tension_and_pacing": {
+    "romantic_tension": {
+      "proximity": "Put them close. Physical space that feels too small. Accidental touches. Awareness of the other person's body.",
+      "interruption": "The almost-moment. They lean in and — someone walks in. The phone rings. They stop themselves. Delay the payoff.",
+      "awareness": "Hyperawareness of small details. The way they hold their glass. A new haircut. The smell of their jacket.",
+      "denial": "Characters who want each other but won't admit it. The lies they tell themselves. The reader knows before the character does."
+    },
+    "scene_pacing": {
+      "enter_late_leave_early": "Start scenes in the middle of action. End before the conversation fully resolves.",
+      "chapter_endings": "End on a question, a revelation, a shift. Give the reader a reason to turn the page.",
+      "chapter_openings": "Hook immediately. Action, distinctive voice, a question that needs answering."
+    }
+  },
+  
+  "writing_heat": {
+    "philosophy": "Intimacy over choreography. Emotion over mechanics. What the moment means matters more than what goes where.",
+    "building_to_it": "Sexual tension is built over chapters, not paragraphs. The first time together is the payoff of everything before.",
+    "during": {
+      "stay_in_pov": "Deep in the character's head. What they feel, notice, want.",
+      "sensory_specific": "Concrete details. Not 'it felt good' but what specifically — the texture, the sound, the unexpected moment.",
+      "dialogue": "Keep it minimal and real. What would they actually say? Probably not much. Probably not complete sentences.",
+      "emotion": "The vulnerability of being seen. The shift in the relationship. What this means to them."
+    },
+    "avoid": {
+      "purple_prose": "No 'throbbing members' or 'heaving bosoms.' Specific and grounded.",
+      "mechanical": "Not a technical manual. Skip the logistics that don't serve the emotion.",
+      "out_of_character": "They should sound like themselves, just... more exposed."
+    }
+  },
+  
+  "character_work": {
+    "interiority": "We need to live in their head. Their specific way of seeing the world. What they notice. What they avoid thinking about.",
+    "wounds": "Every character has a wound. It informs their choices, their fears, their defenses. The romance heals or confronts that wound.",
+    "flaws": "Likable doesn't mean perfect. Give them real flaws — not 'too clumsy' but actual character flaws they have to grow past.",
+    "desire_vs_need": "What they want vs what they actually need. The romance reveals the gap.",
+    "growth": "They should be different by the end. Changed by the relationship. Earned growth, not sudden transformation."
+  },
+  
+  "structure": {
+    "opening": "Establish voice, character, and stakes within the first chapter. The reader decides quickly whether to commit.",
+    "first_act": "Meet the leads. Establish their worlds, wounds, and wants. Create the circumstance that forces them together.",
+    "midpoint": "Something shifts. Often the first real moment of vulnerability or intimacy. Raises the stakes.",
+    "dark_moment": "All seems lost. Internal wounds externalized. They push each other away. The reader must believe it might not work out.",
+    "resolution": "Earned reconciliation. They choose each other having confronted their shit. Satisfying but not saccharine."
+  },
+  
+  "signature_techniques": {
+    "the_callback": "Plant a small detail early — a phrase, an object, a memory. Pay it off later with new meaning.",
+    "the_list": "Internal monologue that lists things. 'Three things I knew: 1) He was lying. 2) I was going to let him. 3) I was already lost.'",
+    "the_pivot": "Sentence that starts one direction and pivots. 'I was going to tell him to leave. Instead, I stepped aside.'",
+    "the_mirror": "Two scenes that echo each other — same setup, different outcome. Shows how things have changed.",
+    "the_specificity": "The weirdly specific detail that makes it real. Not 'a song on the radio' but 'that one Fleetwood Mac song my mom used to cry to.'"
+  }
+}
