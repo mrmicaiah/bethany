@@ -38,7 +38,7 @@ export default {
     }
     
     // Get the singleton Bethany instance
-    const id = env.BETHANY.idFromName('bethany-v10');
+    const id = env.BETHANY.idFromName('bethany-v11');
     const bethany = env.BETHANY.get(id);
 
     // ============================================
@@ -191,24 +191,25 @@ export default {
     // ============================================
 
     if (url.pathname === '/trigger/morning') {
-      await bethany.fetch(new Request('https://bethany/rhythm/morningBriefing'));
+      ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/morningBriefing')));
       return new Response('Morning briefing triggered');
     }
     if (url.pathname === '/trigger/midday') {
-      await bethany.fetch(new Request('https://bethany/rhythm/middayCheck'));
+      ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/middayCheck')));
       return new Response('Midday check triggered');
     }
     if (url.pathname === '/trigger/evening') {
-      await bethany.fetch(new Request('https://bethany/rhythm/eveningSynthesis'));
+      ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/eveningSynthesis')));
       return new Response('Evening synthesis triggered');
     }
     if (url.pathname === '/trigger/check') {
-      await bethany.fetch(new Request('https://bethany/rhythm/awarenessCheck'));
+      ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/awarenessCheck')));
       return new Response('Awareness check triggered');
     }
     if (url.pathname === '/trigger/write') {
-      await bethany.fetch(new Request('https://bethany/rhythm/writingSession'));
-      return new Response('Writing session triggered');
+      // Writing session runs in background - takes too long to await
+      ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/writingSession')));
+      return new Response('Writing session triggered - check /library/status in a minute');
     }
 
     // Debug: check memory
@@ -230,7 +231,7 @@ export default {
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    const id = env.BETHANY.idFromName('bethany-v10');
+    const id = env.BETHANY.idFromName('bethany-v11');
     const bethany = env.BETHANY.get(id);
 
     const hour = new Date().getUTCHours();
@@ -238,16 +239,16 @@ export default {
 
     // Morning writing session (9am Central = after her 5-9am writing time)
     if (centralHour === 9) {
-      await bethany.fetch(new Request('https://bethany/rhythm/writingSession'));
+      ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/writingSession')));
     }
     
     // Regular rhythms
     if (centralHour === 10) {
-      await bethany.fetch(new Request('https://bethany/rhythm/morningBriefing'));
+      ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/morningBriefing')));
     } else if (centralHour === 14) {
-      await bethany.fetch(new Request('https://bethany/rhythm/middayCheck'));
+      ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/middayCheck')));
     } else if (centralHour === 20) {
-      await bethany.fetch(new Request('https://bethany/rhythm/eveningSynthesis'));
+      ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/eveningSynthesis')));
     }
   }
 };
