@@ -66,107 +66,69 @@ export interface WritingStatus {
 }
 
 // ============================================
-// DETAILED STYLE GUIDE TYPE
+// STYLE GUIDE TYPE (matches style-guide.json)
 // ============================================
 
-export interface DetailedStyleGuide {
+export interface StyleGuide {
   voice: {
-    core_quality: string;
+    overall: string;
     tone: string;
-    emotional_register: string;
+    pov: string;
+    tense: string;
   };
-  prose_style: {
-    sentence_rhythm: {
-      pattern: string;
-      short_sentences: string;
-      long_sentences: string;
-      fragments: string;
-    };
-    word_choice: {
-      principle: string;
-      avoid: string;
-      dialogue_tags: string;
-    };
-    paragraph_structure: {
-      principle: string;
-      interiority: string;
-    };
-  };
-  pov_and_tense: {
-    default: string;
-    dual_pov: string;
-    close_third: string;
-    head_hopping: string;
+  sentence_craft: {
+    rhythm: string;
+    paragraphing: string;
+    word_choice: string;
+    verbs: string;
   };
   dialogue: {
-    principle: string;
-    subtext: string;
-    banter: {
-      rhythm: string;
-      function: string;
-      balance: string;
-    };
-    tension_in_dialogue: string;
-    avoid: {
-      exposition_dumps: string;
-      on_the_nose: string;
-      uniform_voice: string;
-    };
+    style: string;
+    tags: string;
+    realism: string;
+    chemistry: string;
   };
-  emotional_beats: {
-    building: string;
-    earning_moments: string;
-    the_gut_punch: string;
-    aftermath: string;
+  emotional_craft: {
+    show_dont_tell: string;
+    interiority: string;
+    vulnerability: string;
+    earned_emotion: string;
   };
   tension_and_pacing: {
-    romantic_tension: {
-      proximity: string;
-      interruption: string;
-      awareness: string;
-      denial: string;
-    };
-    scene_pacing: {
-      enter_late_leave_early: string;
-      chapter_endings: string;
-      chapter_openings: string;
-    };
+    chapter_openings: string;
+    chapter_endings: string;
+    scene_breaks: string;
+    slow_burn: string;
   };
-  writing_heat: {
-    philosophy: string;
-    building_to_it: string;
-    during: {
-      stay_in_pov: string;
-      sensory_specific: string;
-      dialogue: string;
-      emotion: string;
-    };
-    avoid: {
-      purple_prose: string;
-      mechanical: string;
-      out_of_character: string;
-    };
-  };
-  character_work: {
-    interiority: string;
-    wounds: string;
-    flaws: string;
-    desire_vs_need: string;
-    growth: string;
-  };
-  structure: {
-    opening: string;
-    first_act: string;
-    midpoint: string;
+  romance_specific: {
+    first_meeting: string;
+    physical_awareness: string;
+    the_first_kiss: string;
+    heat_level: string;
+    conflict: string;
     dark_moment: string;
     resolution: string;
   };
   signature_techniques: {
     the_callback: string;
     the_list: string;
-    the_pivot: string;
-    the_mirror: string;
-    the_specificity: string;
+    the_direct_address: string;
+    the_loaded_pause: string;
+    the_body_tells: string;
+  };
+  things_to_avoid: {
+    adverbs: string;
+    info_dumps: string;
+    perfect_characters: string;
+    rushed_pacing: string;
+    cliches: string;
+    convenient_plot: string;
+  };
+  process_notes: {
+    drafting: string;
+    revision: string;
+    dialogue_pass: string;
+    emotion_pass: string;
   };
 }
 
@@ -285,11 +247,16 @@ export async function initializeLibrary(bucket: R2Bucket): Promise<void> {
     bucket.put(`${LIBRARY_PREFIX}/whiskey-and-regret/characters.json`, JSON.stringify(firstBookCharacters, null, 2)),
   ]);
 
-  // Load and save the detailed style guide
-  const styleGuide = await fetch('https://raw.githubusercontent.com/mrmicaiah/bethany/main/src/craft/style-guide-detailed.json');
-  if (styleGuide.ok) {
-    const styleData = await styleGuide.text();
-    await bucket.put(`${CRAFT_PREFIX}/style-guide.json`, styleData);
+  // Load the detailed style guide from the repo
+  try {
+    const styleGuide = await fetch('https://raw.githubusercontent.com/mrmicaiah/bethany/main/src/craft/style-guide.json');
+    if (styleGuide.ok) {
+      const styleData = await styleGuide.text();
+      await bucket.put(`${CRAFT_PREFIX}/style-guide.json`, styleData);
+      console.log('Style guide loaded from repo');
+    }
+  } catch (e) {
+    console.log('Could not fetch style guide from repo, will use fallback');
   }
 
   console.log('Library initialized');
@@ -309,7 +276,7 @@ export async function updateWritingStatus(bucket: R2Bucket, updates: Partial<Wri
   await bucket.put(`${WRITING_PREFIX}/status.json`, JSON.stringify(updated, null, 2));
 }
 
-export async function getStyleGuide(bucket: R2Bucket): Promise<DetailedStyleGuide | null> {
+export async function getStyleGuide(bucket: R2Bucket): Promise<StyleGuide | null> {
   const obj = await bucket.get(`${CRAFT_PREFIX}/style-guide.json`);
   if (!obj) return null;
   return JSON.parse(await obj.text());
@@ -494,59 +461,4 @@ export async function getRandomExcerpt(bucket: R2Bucket, maxLength: number = 500
     excerpt: excerpt.trim(),
     source: `${book.title}, Chapter ${chapter.number}`,
   };
-}
-
-// ============================================
-// FORMAT STYLE GUIDE FOR WRITING PROMPT
-// ============================================
-
-export function formatStyleGuideForWriting(style: DetailedStyleGuide): string {
-  return `## YOUR WRITING VOICE
-
-**Core Quality**: ${style.voice.core_quality}
-**Tone**: ${style.voice.tone}
-**Emotional Register**: ${style.voice.emotional_register}
-
-## PROSE MECHANICS
-
-**Sentence Rhythm**: ${style.prose_style.sentence_rhythm.pattern}
-- Short sentences: ${style.prose_style.sentence_rhythm.short_sentences}
-- Fragments: ${style.prose_style.sentence_rhythm.fragments}
-
-**Word Choice**: ${style.prose_style.word_choice.principle}
-**Avoid**: ${style.prose_style.word_choice.avoid}
-
-**POV**: ${style.pov_and_tense.default}
-
-## DIALOGUE
-
-${style.dialogue.principle}
-**Subtext**: ${style.dialogue.subtext}
-**Banter**: ${style.dialogue.banter.rhythm}
-**Tension**: ${style.dialogue.tension_in_dialogue}
-
-## EMOTIONAL BEATS
-
-**Building**: ${style.emotional_beats.building}
-**The Gut Punch**: ${style.emotional_beats.the_gut_punch}
-**Aftermath**: ${style.emotional_beats.aftermath}
-
-## ROMANTIC TENSION
-
-**Proximity**: ${style.tension_and_pacing.romantic_tension.proximity}
-**Interruption**: ${style.tension_and_pacing.romantic_tension.interruption}
-**Denial**: ${style.tension_and_pacing.romantic_tension.denial}
-
-## SCENE PACING
-
-**Enter Late, Leave Early**: ${style.tension_and_pacing.scene_pacing.enter_late_leave_early}
-**Chapter Endings**: ${style.tension_and_pacing.scene_pacing.chapter_endings}
-**Chapter Openings**: ${style.tension_and_pacing.scene_pacing.chapter_openings}
-
-## SIGNATURE TECHNIQUES
-
-- **The Callback**: ${style.signature_techniques.the_callback}
-- **The List**: ${style.signature_techniques.the_list}
-- **The Pivot**: ${style.signature_techniques.the_pivot}
-- **The Specificity**: ${style.signature_techniques.the_specificity}`;
 }
