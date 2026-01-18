@@ -100,6 +100,11 @@ export default {
       return new Response('Awareness check triggered');
     }
 
+    // Debug: check memory
+    if (url.pathname === '/debug/memory') {
+      return bethany.fetch(new Request('https://bethany/debug/memory'));
+    }
+
     // Health check
     if (url.pathname === '/health') {
       return new Response('Bethany v10 - with R2 memory');
