@@ -21,6 +21,12 @@ import {
   summarizeSessionForMemory,
   getCurrentSession,
   getRecentSessionsSummary,
+  getSessionListForContext,
+  getSessionTranscript,
+  findSessionByTopic,
+  getMostRecentSession,
+  archiveSession,
+  cleanupOldSessions,
   SessionCheckResult
 } from './sessions';
 
@@ -102,6 +108,7 @@ export class Bethany implements DurableObject {
         if (rhythm === 'eveningSynthesis') await this.eveningSynthesis();
         if (rhythm === 'awarenessCheck') await this.awarenessCheck();
         if (rhythm === 'writingSession') await this.writingSession();
+        if (rhythm === 'cleanup') await this.runCleanup();
         return new Response('OK');
       }
       
@@ -118,6 +125,21 @@ export class Bethany implements DurableObject {
         const session = await getCurrentSession(this.env.MEMORY);
         return new Response(JSON.stringify(session, null, 2), { 
           headers: { 'Content-Type': 'application/json' } 
+        });
+      }
+      
+      // Debug endpoint to check session index
+      if (url.pathname === '/debug/sessions') {
+        const sessionList = await getSessionListForContext(this.env.MEMORY, 50);
+        return new Response(sessionList, { headers: { 'Content-Type': 'text/plain' } });
+      }
+      
+      // Debug endpoint to get a specific session transcript
+      if (url.pathname.startsWith('/debug/transcript/')) {
+        const sessionId = url.pathname.replace('/debug/transcript/', '');
+        const transcript = await getSessionTranscript(this.env.MEMORY, sessionId);
+        return new Response(transcript || 'Session not found', { 
+          headers: { 'Content-Type': 'text/plain' } 
         });
       }
       
@@ -146,20 +168,36 @@ export class Bethany implements DurableObject {
 
   private async handleSessionTransition(sessionResult: SessionCheckResult): Promise<void> {
     if (sessionResult.isNewSession && sessionResult.previousSession) {
-      // Summarize and store the previous session in long-term memory
+      // Archive the previous session with AI-generated title
+      await archiveSession(
+        this.env.MEMORY, 
+        sessionResult.previousSession, 
+        this.env.ANTHROPIC_API_KEY
+      );
+      
+      // Also store summary in long-term memory (legacy support)
       const summary = summarizeSessionForMemory(sessionResult.previousSession);
       if (summary) {
         const date = new Date(sessionResult.previousSession.started_at).toISOString().split('T')[0];
         await addConversationSummary(this.env.MEMORY, {
           date,
           summary,
-          topics: [], // Could extract from messages
-          vibe: 'casual', // Could analyze
+          topics: [],
+          vibe: 'casual',
           memorable_moment: null,
         });
         console.log('Stored session summary:', summary);
       }
     }
+  }
+
+  // ============================================
+  // CLEANUP (run periodically)
+  // ============================================
+
+  async runCleanup() {
+    console.log('Running session cleanup...');
+    await cleanupOldSessions(this.env.MEMORY);
   }
 
   // ============================================
@@ -332,7 +370,7 @@ Text him something fresh — could be about your day, something you're thinking 
 
     const response = await this.think(prompt, sessionResult.session);
     if (response) {
-      const { message } = this.parseResponse(response);
+      const { message, sessionRequest } = this.parseResponse(response);
       await addMessageToSession(this.env.MEMORY, 'bethany', message);
       await this.sendMessage(message);
     }
@@ -472,10 +510,26 @@ Most of the time, [silent] is the right answer. You have your own life.`;
       });
     }
 
-    const response = await this.think(message, sessionResult.session);
+    // First pass — let Bethany respond
+    let response = await this.think(message, sessionResult.session);
     
     if (response) {
-      const { message: textMessage, note } = this.parseResponse(response);
+      let { message: textMessage, note, sessionRequest } = this.parseResponse(response);
+      
+      // Handle session pull request
+      if (sessionRequest) {
+        const transcript = await getSessionTranscript(this.env.MEMORY, sessionRequest);
+        if (transcript) {
+          // Re-run thinking with the transcript included
+          console.log('Pulling session transcript:', sessionRequest);
+          response = await this.thinkWithTranscript(message, sessionResult.session, transcript);
+          if (response) {
+            const parsed = this.parseResponse(response);
+            textMessage = parsed.message;
+            note = parsed.note;
+          }
+        }
+      }
       
       if (note) {
         console.log('Bethany noted:', note);
@@ -497,19 +551,29 @@ Most of the time, [silent] is the right answer. You have your own life.`;
   }
 
   // ============================================
-  // PARSE RESPONSE FOR NOTES
+  // PARSE RESPONSE FOR NOTES AND SESSION REQUESTS
   // ============================================
 
-  parseResponse(response: string): { message: string; note: string | null } {
-    const noteMatch = response.match(/\[note:\s*(.+?)\]\s*$/i);
+  parseResponse(response: string): { message: string; note: string | null; sessionRequest: string | null } {
+    let sessionRequest: string | null = null;
+    let note: string | null = null;
+    let message = response;
     
-    if (noteMatch) {
-      const note = noteMatch[1].trim();
-      const message = response.replace(noteMatch[0], '').trim();
-      return { message, note };
+    // Check for session pull request
+    const sessionMatch = message.match(/\[pull_session:\s*([^\]]+)\]/i);
+    if (sessionMatch) {
+      sessionRequest = sessionMatch[1].trim();
+      message = message.replace(sessionMatch[0], '').trim();
     }
     
-    return { message: response, note: null };
+    // Check for note
+    const noteMatch = message.match(/\[note:\s*(.+?)\]\s*$/i);
+    if (noteMatch) {
+      note = noteMatch[1].trim();
+      message = message.replace(noteMatch[0], '').trim();
+    }
+    
+    return { message, note, sessionRequest };
   }
 
   // ============================================
@@ -536,22 +600,20 @@ Most of the time, [silent] is the right answer. You have your own life.`;
       }
     }
     
-    // Format SESSION context (not old D1 history)
+    // Format SESSION context (current conversation)
     const sessionContext = formatSessionForContext(session as any);
     
-    // Get recent session summaries for light context
-    const recentSessions = await getRecentSessionsSummary(this.env.MEMORY);
-    const recentContext = recentSessions.length > 0 
-      ? `\n\n## Recent conversations (for context, not continuation):\n${recentSessions.join('\n')}`
-      : '';
+    // Get session list for reference
+    const sessionList = await getSessionListForContext(this.env.MEMORY, 20);
+    const sessionListContext = `\n\n## Past sessions (verbatim transcripts available):\n${sessionList}`;
     
     const contextualPrompt = getContextualPrompt({
       currentTime: new Date(),
-      lastConversation: [], // Not using D1 history anymore
+      lastConversation: [],
     });
 
     // Build full system prompt
-    const fullSystemPrompt = BETHANY_SYSTEM_PROMPT + '\n\n' + memoryContext + writingContext + recentContext + '\n\n' + contextualPrompt + `\n\n## This conversation:\n${sessionContext}`;
+    const fullSystemPrompt = BETHANY_SYSTEM_PROMPT + '\n\n' + memoryContext + writingContext + sessionListContext + '\n\n' + contextualPrompt + `\n\n## This conversation:\n${sessionContext}`;
 
     const messages: any[] = [{ role: 'user', content: input }];
     
@@ -579,6 +641,62 @@ Most of the time, [silent] is the right answer. You have your own life.`;
         return null;
       }
       
+      return "ugh my brain just glitched. what were you saying?";
+    }
+
+    const data = await response.json() as any;
+    
+    const textBlock = data.content?.find((block: any) => block.type === 'text');
+    return textBlock ? textBlock.text : "...";
+  }
+
+  // ============================================
+  // THINKING WITH TRANSCRIPT (for session pulls)
+  // ============================================
+
+  async thinkWithTranscript(input: string, session: { messages: any[] }, transcript: string): Promise<string | null> {
+    // Load long-term memory from R2
+    const hotMemory = await loadHotMemory(this.env.MEMORY);
+    const people = await loadPeople(this.env.MEMORY);
+    
+    let memoryContext = '';
+    if (hotMemory) {
+      memoryContext = formatMemoryForContext(hotMemory, people);
+    }
+    
+    // Format SESSION context (current conversation)
+    const sessionContext = formatSessionForContext(session as any);
+    
+    const contextualPrompt = getContextualPrompt({
+      currentTime: new Date(),
+      lastConversation: [],
+    });
+
+    // Build full system prompt WITH the pulled transcript
+    const fullSystemPrompt = BETHANY_SYSTEM_PROMPT + '\n\n' + memoryContext + 
+      `\n\n## PULLED TRANSCRIPT (the conversation he's referencing):\n${transcript}\n\n---\n\n` +
+      contextualPrompt + `\n\n## This conversation:\n${sessionContext}`;
+
+    const messages: any[] = [{ role: 'user', content: input }];
+    
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': this.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1024,
+        system: fullSystemPrompt,
+        messages: messages
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Claude API error:', errorText);
       return "ugh my brain just glitched. what were you saying?";
     }
 
