@@ -10,7 +10,6 @@ database_name = "productivity-brain"
 database_id = "be348cf9-552b-41ae-a1d8-cd20be25d6ee"
 
 # Bethany's long-term memory (R2)
-# Run: npx wrangler r2 bucket create bethany-memory
 [[r2_buckets]]
 binding = "MEMORY"
 bucket_name = "bethany-memory"
@@ -23,6 +22,10 @@ class_name = "Bethany"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Bethany"]
+
+# Scheduled triggers - runs every hour
+[triggers]
+crons = ["0 * * * *"]
 
 [vars]
 # Non-secret config can go here
