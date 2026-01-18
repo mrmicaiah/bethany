@@ -1,0 +1,70 @@
+{
+  "voice": {
+    "overall": "Intimate, confessional, like the reader is eavesdropping on someone's most private thoughts. The prose feels like a secret being shared.",
+    "tone": "Conversational but literary. Smart without being pretentious. Emotional without being melodramatic. Funny when it needs to be, devastating when it counts.",
+    "pov": "First person, deep POV. The reader should forget they're reading — they're inside this person's head. Dual POV for romance, alternating chapters, each voice distinct.",
+    "tense": "Past tense for narrative, present tense sparingly for emphasis in emotional peaks."
+  },
+  
+  "sentence_craft": {
+    "rhythm": "Vary sentence length deliberately. Short punchy sentences for impact. Longer flowing ones for emotion and introspection. Fragments for emphasis. The rhythm should match the emotional beat of the scene.",
+    "paragraphing": "Short paragraphs in tense moments — white space creates pace. Longer paragraphs when settling into emotion or memory. Single-sentence paragraphs hit like a punch.",
+    "word_choice": "Specific over general. 'Bourbon' not 'drink.' 'Thursday' not 'one day.' Concrete details anchor emotional moments. Avoid adjective stacking.",
+    "verbs": "Strong verbs carry weight. Cut adverbs ruthlessly. 'She slammed the door' not 'She closed the door angrily.' Let the verb do the work."
+  },
+  
+  "dialogue": {
+    "style": "Banter-forward. Characters talk around what they mean. Subtext is everything — the tension lives in what's NOT said.",
+    "tags": "Use 'said' and 'asked' mostly. Avoid adverbs in dialogue tags entirely. Let the dialogue itself convey tone. Better yet, use action beats instead of tags.",
+    "realism": "Real people interrupt each other. They don't finish sentences. They change subjects. They say 'um' and 'I mean' and trail off. Dialogue should feel overheard, not scripted.",
+    "chemistry": "Banter reveals character. Each person should have a distinct voice. Witty doesn't mean quippy — it means sharp, specific, earned. The best flirty dialogue feels like a tennis match."
+  },
+  
+  "emotional_craft": {
+    "show_dont_tell": "Never write 'she felt sad.' Show it in the body — tight chest, held breath, the way she can't look at him. Emotion lives in physical sensation and behavior.",
+    "interiority": "Internal monologue is where the magic happens. Let the character process, contradict themselves, lie to themselves, realize things mid-thought. Stream of consciousness that still reads clean.",
+    "vulnerability": "The most powerful moments are when characters admit something true. Not big dramatic confessions — small, specific vulnerabilities. 'I kept the ticket stub' hits harder than 'I never stopped loving you.'",
+    "earned_emotion": "Big emotional payoffs require buildup. Plant seeds early. The reader should feel the weight of history when the moment arrives. Shortcuts feel cheap."
+  },
+  
+  "tension_and_pacing": {
+    "chapter_openings": "Hook immediately. Start with action, a striking image, a provocative thought, or mid-conversation. Never start with weather or waking up.",
+    "chapter_endings": "End on a turn — a revelation, a question, a shift. The reader should feel compelled to keep going. Micro-cliffhangers, not just plot ones. Emotional turns count.",
+    "scene_breaks": "Use white space strategically. A scene break can skip boring transitions, create tension through what's not shown, or signal a shift in energy.",
+    "slow_burn": "Anticipation is everything. Delay gratification. The almost-kiss interrupted. The loaded silence. The accidental touch. Make the reader desperate for the payoff."
+  },
+  
+  "romance_specific": {
+    "first_meeting": "Friction creates spark. They shouldn't like each other, or the timing is wrong, or circumstances are impossible. Attraction should feel inconvenient.",
+    "physical_awareness": "Before any kiss, there should be chapters of physical awareness. Noticing hands. The way he smells. The space between them feeling charged. The body knows before the mind admits it.",
+    "the_first_kiss": "Earn it. Build unbearable tension. It should feel inevitable AND surprising. Often best when interrupted or complicated. The kiss changes everything — there's no going back.",
+    "heat_level": "Steamy but earned. Build anticipation. Their first time together is a scene, not a summary. Emotion intertwined with physical — what does this mean to them? Specific and honest beats flowery.",
+    "conflict": "Internal wounds meeting external pressure. The thing they're most afraid of should be exactly what the relationship forces them to confront. Miscommunication only works if it's rooted in character, not convenience.",
+    "dark_moment": "All seems lost. They push each other away. The reader has to genuinely feel it might be over. This is where theme crystallizes — what is this story really about?",
+    "resolution": "Satisfying but not saccharine. The wound is healed but the scar remains. They're better together, but they've both changed. Earn the happiness."
+  },
+  
+  "signature_techniques": {
+    "the_callback": "Plant a small detail early — a phrase, an object, a memory. Bring it back later with new meaning. The reader feels smart for remembering, and the story feels crafted.",
+    "the_list": "Sometimes a character's thoughts come as a list. What she knows. What she wishes she didn't. Three things she'll never tell him. It creates intimacy and rhythm.",
+    "the_direct_address": "Occasionally, the narrator speaks directly to the reader or to another character in their head. 'You probably think I should have left then. I did too.' Creates intimacy.",
+    "the_loaded_pause": "After someone says something significant, don't rush to the response. Let the silence breathe. What happens in that pause? What does the character notice, think, feel?",
+    "the_body_tells": "In emotional moments, ground the reader in physical sensation. Tight throat. Shaking hands. The way she can't quite breathe. The body reacts before the mind processes."
+  },
+  
+  "things_to_avoid": {
+    "adverbs": "Especially in dialogue tags. Almost always a sign of weak verb choice or unclear dialogue.",
+    "info_dumps": "Weave backstory through action and dialogue. The reader doesn't need to know everything upfront. Mystery is engaging.",
+    "perfect_characters": "Flaws make characters lovable, not unlikable. Give them contradictions. Let them make mistakes. Let them be wrong sometimes.",
+    "rushed_pacing": "If a moment matters, give it space. The dark moment needs weight. The first kiss needs buildup. The resolution needs room to breathe.",
+    "cliches": "Avoid phrases you've read a hundred times. Find a fresh way to say it or cut it. 'Her heart skipped a beat' is dead. What does YOUR character's body do?",
+    "convenient_plot": "If something only happens to move plot forward, the reader feels it. Every event should feel both surprising and inevitable in retrospect."
+  },
+  
+  "process_notes": {
+    "drafting": "Write fast and messy. Don't edit while drafting. Get the story down. The magic happens in revision.",
+    "revision": "Read aloud. Cut 10% minimum. Every scene should do at least two things — advance plot AND reveal character, or build relationship AND raise stakes.",
+    "dialogue_pass": "Do a pass just for dialogue. Read it out loud. Does each character sound distinct? Could you tell who's speaking without tags?",
+    "emotion_pass": "Do a pass for emotional beats. Are you showing or telling? Is every big moment earned? Where can you add physical sensation?"
+  }
+}
