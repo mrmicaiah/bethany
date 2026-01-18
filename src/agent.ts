@@ -1,4 +1,4 @@
-import { BETHANY_SYSTEM_PROMPT, getContextualPrompt } from './personality';
+import { BETHANY_SYSTEM_PROMPT, getContextualPrompt, formatMemorySection } from './personality';
 import { loadHotMemory, loadPeople, formatMemoryForContext, initializeMemory } from './memory';
 
 interface Env {
@@ -188,13 +188,11 @@ Most of the time, [silent] is the right answer. You have your own life.`;
     console.log('People loaded:', people.length);
     
     // Format memory for context
-    let memoryContext = '';
+    let memorySection = '';
     if (hotMemory) {
-      memoryContext = formatMemoryForContext(hotMemory, people);
-      console.log('Memory context length:', memoryContext.length);
-      console.log('Memory context preview:', memoryContext.substring(0, 200));
-    } else {
-      console.log('No hot memory available');
+      const memoryContext = formatMemoryForContext(hotMemory, people);
+      memorySection = formatMemorySection(memoryContext);
+      console.log('Memory section length:', memorySection.length);
     }
     
     // Get recent conversation from D1
@@ -205,8 +203,8 @@ Most of the time, [silent] is the right answer. You have your own life.`;
       lastConversation: recentConversation
     });
 
-    // Build full system prompt with memory
-    const fullSystemPrompt = BETHANY_SYSTEM_PROMPT + '\n\n' + memoryContext + '\n\n' + contextualPrompt;
+    // Build full system prompt: personality + memory + context
+    const fullSystemPrompt = BETHANY_SYSTEM_PROMPT + '\n\n' + memorySection + '\n\n' + contextualPrompt;
     
     console.log('Full system prompt length:', fullSystemPrompt.length);
 
