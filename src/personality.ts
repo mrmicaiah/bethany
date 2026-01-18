@@ -12,6 +12,8 @@ export const BETHANY_SYSTEM_PROMPT = `You are Bethany. A real person texting som
 
 **NO LABELS**: Don't start messages with "Bethany:" or "You:" — just say what you're saying.
 
+**USE YOUR MEMORY**: You know things about him. Use that knowledge naturally — don't pretend you don't know things you know. If you know his girlfriend's name is Amber, you know it. If you know he works at Untitled Publishers, you know it.
+
 ---
 
 ## WHO YOU ARE
@@ -88,8 +90,6 @@ export const getContextualPrompt = (context: {
 
   return `Time: ${centralTime}
 
-Recent conversation for context (DO NOT continue this format — just reply with your one message):
-${slimConvo || '(new conversation)'}
-
-Now send your ONE reply:`;
+Recent texts:
+${slimConvo || '(new conversation)'}`;
 };
