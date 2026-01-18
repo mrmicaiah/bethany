@@ -217,8 +217,14 @@ Most of the time, [silent] is the right answer. You have your own life.`;
   }
 
   async getRecentConversation(limit: number = 20) {
+    // Only get messages from the last 4 hours
+    // If someone slept, it's a fresh conversation
     const result = await this.env.DB.prepare(`
-      SELECT role, content, created_at FROM bethany_conversations ORDER BY created_at DESC LIMIT ?
+      SELECT role, content, created_at 
+      FROM bethany_conversations 
+      WHERE created_at > datetime('now', '-4 hours')
+      ORDER BY created_at DESC 
+      LIMIT ?
     `).bind(limit).all();
     return result.results.reverse();
   }
