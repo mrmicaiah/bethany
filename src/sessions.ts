@@ -10,15 +10,23 @@ export interface SessionMessage {
 
 export interface Session {
   id: string;
+  title?: string;  // AI-generated title when session closes
   started_at: string;
   last_activity: string;
   messages: SessionMessage[];
   context?: string;  // what triggered this session (rhythm, incoming message, etc.)
 }
 
+export interface SessionIndexEntry {
+  id: string;
+  title: string;
+  date: string;  // YYYY-MM-DD
+  message_count: number;
+}
+
 export interface SessionIndex {
   current_session_id: string | null;
-  recent_sessions: string[];  // last 5 session IDs for reference
+  archived_sessions: SessionIndexEntry[];  // All closed sessions with titles
   last_updated: string;
 }
 
@@ -27,7 +35,8 @@ export interface SessionIndex {
 // ============================================
 
 const SESSION_PREFIX = 'micaiah/sessions';
-const SESSION_GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 hours = new session
+const SESSION_GAP_THRESHOLD_MS = 4 * 60 * 60 * 1000; // 4 hours = new session
+const SESSION_RETENTION_DAYS = 150; // ~5 months
 
 // ============================================
 // SESSION FUNCTIONS
@@ -38,11 +47,22 @@ export async function getSessionIndex(bucket: R2Bucket): Promise<SessionIndex> {
   if (!obj) {
     return {
       current_session_id: null,
-      recent_sessions: [],
+      archived_sessions: [],
       last_updated: new Date().toISOString(),
     };
   }
-  return JSON.parse(await obj.text());
+  const parsed = JSON.parse(await obj.text());
+  
+  // Migration: handle old format
+  if (parsed.recent_sessions && !parsed.archived_sessions) {
+    return {
+      current_session_id: parsed.current_session_id,
+      archived_sessions: [],
+      last_updated: parsed.last_updated,
+    };
+  }
+  
+  return parsed;
 }
 
 async function saveSessionIndex(bucket: R2Bucket, index: SessionIndex): Promise<void> {
@@ -64,6 +84,101 @@ export async function getCurrentSession(bucket: R2Bucket): Promise<Session | nul
   const index = await getSessionIndex(bucket);
   if (!index.current_session_id) return null;
   return getSession(bucket, index.current_session_id);
+}
+
+// ============================================
+// TITLE GENERATION
+// ============================================
+
+export async function generateSessionTitle(
+  session: Session,
+  anthropicApiKey: string
+): Promise<string> {
+  if (session.messages.length === 0) {
+    return 'empty-session';
+  }
+  
+  // Build a transcript summary for Claude to title
+  const transcript = session.messages
+    .map(m => `${m.role === 'bethany' ? 'Bethany' : 'Him'}: ${m.content}`)
+    .join('\n');
+  
+  const prompt = `Here's a text conversation. Generate a short, descriptive title (2-5 words, lowercase, hyphens instead of spaces). The title should capture what they talked about.
+
+Examples of good titles:
+- pancakes-and-morning-routine
+- venting-about-work
+- flirty-late-night
+- planning-weekend-trip
+- his-new-project-idea
+- amber-birthday-gift
+
+Conversation:
+${transcript}
+
+Reply with ONLY the title, nothing else.`;
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': anthropicApiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 50,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+
+    if (!response.ok) {
+      console.error('Title generation failed:', await response.text());
+      return fallbackTitle(session);
+    }
+
+    const data = await response.json() as any;
+    const title = data.content?.find((block: any) => block.type === 'text')?.text?.trim();
+    
+    if (!title) {
+      return fallbackTitle(session);
+    }
+    
+    // Clean up the title
+    return title
+      .toLowerCase()
+      .replace(/[^a-z0-9-\s]/g, '')
+      .replace(/\s+/g, '-')
+      .slice(0, 50);
+      
+  } catch (error) {
+    console.error('Title generation error:', error);
+    return fallbackTitle(session);
+  }
+}
+
+function fallbackTitle(session: Session): string {
+  // Simple keyword-based fallback
+  const allText = session.messages.map(m => m.content.toLowerCase()).join(' ');
+  
+  if (allText.includes('writing') || allText.includes('book') || allText.includes('chapter')) {
+    return 'writing-talk';
+  }
+  if (allText.includes('work') || allText.includes('client') || allText.includes('meeting')) {
+    return 'work-stuff';
+  }
+  if (allText.includes('sexy') || allText.includes('bed') || allText.includes('want you')) {
+    return 'flirty-chat';
+  }
+  if (allText.includes('morning') || allText.includes('coffee')) {
+    return 'morning-chat';
+  }
+  if (allText.includes('night') || allText.includes('sleep')) {
+    return 'evening-chat';
+  }
+  
+  return 'casual-chat';
 }
 
 // ============================================
@@ -109,7 +224,7 @@ export async function checkAndManageSession(
   }
   
   if (needsNewSession) {
-    // Create new session
+    // Create new session with simple ID (title added when archived)
     const newSessionId = `${now.toISOString().split('T')[0]}-${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}-${crypto.randomUUID().slice(0, 8)}`;
     
     const newSession: Session = {
@@ -120,13 +235,7 @@ export async function checkAndManageSession(
       context,
     };
     
-    // Update index
-    const recentSessions = index.current_session_id 
-      ? [index.current_session_id, ...index.recent_sessions].slice(0, 5)
-      : index.recent_sessions;
-    
     index.current_session_id = newSessionId;
-    index.recent_sessions = recentSessions;
     
     await saveSession(bucket, newSession);
     await saveSessionIndex(bucket, index);
@@ -144,6 +253,43 @@ export async function checkAndManageSession(
     session: currentSession!,
     previousSession: null,
   };
+}
+
+// ============================================
+// ARCHIVE SESSION (called when session closes)
+// ============================================
+
+export async function archiveSession(
+  bucket: R2Bucket,
+  session: Session,
+  anthropicApiKey: string
+): Promise<void> {
+  if (session.messages.length === 0) {
+    // Don't archive empty sessions
+    return;
+  }
+  
+  // Generate title
+  const title = await generateSessionTitle(session, anthropicApiKey);
+  session.title = title;
+  
+  // Save session with title
+  await saveSession(bucket, session);
+  
+  // Add to index
+  const index = await getSessionIndex(bucket);
+  const date = session.started_at.split('T')[0];
+  
+  index.archived_sessions.unshift({
+    id: session.id,
+    title,
+    date,
+    message_count: session.messages.length,
+  });
+  
+  await saveSessionIndex(bucket, index);
+  
+  console.log(`Archived session: ${date}_${title} (${session.messages.length} messages)`);
 }
 
 export async function addMessageToSession(
@@ -171,7 +317,86 @@ export async function addMessageToSession(
 }
 
 // ============================================
-// SESSION SUMMARY FOR LONG-TERM MEMORY
+// GET VERBATIM TRANSCRIPT
+// ============================================
+
+export async function getSessionTranscript(bucket: R2Bucket, sessionId: string): Promise<string | null> {
+  const session = await getSession(bucket, sessionId);
+  if (!session || session.messages.length === 0) {
+    return null;
+  }
+  
+  const date = new Date(session.started_at).toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  });
+  
+  const time = new Date(session.started_at).toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+  
+  let transcript = `Session: ${session.title || 'untitled'} (${date} ${time})\n`;
+  transcript += '---\n';
+  
+  for (const msg of session.messages) {
+    const who = msg.role === 'bethany' ? 'You' : 'Him';
+    transcript += `${who}: ${msg.content}\n`;
+  }
+  
+  return transcript;
+}
+
+// ============================================
+// GET SESSION LIST FOR CONTEXT
+// ============================================
+
+export async function getSessionListForContext(bucket: R2Bucket, limit: number = 20): Promise<string> {
+  const index = await getSessionIndex(bucket);
+  
+  if (index.archived_sessions.length === 0) {
+    return '(no past sessions yet)';
+  }
+  
+  const sessions = index.archived_sessions.slice(0, limit);
+  
+  return sessions.map(s => `${s.date} | ${s.title} (${s.message_count} msgs)`).join('\n');
+}
+
+// ============================================
+// FIND SESSION BY TOPIC
+// ============================================
+
+export async function findSessionByTopic(bucket: R2Bucket, searchTerm: string): Promise<SessionIndexEntry | null> {
+  const index = await getSessionIndex(bucket);
+  const term = searchTerm.toLowerCase();
+  
+  // Search titles for matching term
+  const match = index.archived_sessions.find(s => 
+    s.title.toLowerCase().includes(term)
+  );
+  
+  return match || null;
+}
+
+// ============================================
+// GET MOST RECENT ARCHIVED SESSION
+// ============================================
+
+export async function getMostRecentSession(bucket: R2Bucket): Promise<Session | null> {
+  const index = await getSessionIndex(bucket);
+  
+  if (index.archived_sessions.length === 0) {
+    return null;
+  }
+  
+  return getSession(bucket, index.archived_sessions[0].id);
+}
+
+// ============================================
+// SESSION SUMMARY FOR LONG-TERM MEMORY (legacy support)
 // ============================================
 
 export function summarizeSessionForMemory(session: Session): string {
@@ -189,38 +414,13 @@ export function summarizeSessionForMemory(session: Session): string {
     hour12: true,
   });
   
-  const messageCount = session.messages.length;
-  const topics: string[] = [];
+  const title = session.title || 'casual chat';
   
-  // Extract key topics/themes from messages (simple keyword approach)
-  const allText = session.messages.map(m => m.content.toLowerCase()).join(' ');
-  
-  if (allText.includes('writing') || allText.includes('book') || allText.includes('chapter')) {
-    topics.push('writing');
-  }
-  if (allText.includes('work') || allText.includes('client') || allText.includes('meeting')) {
-    topics.push('work');
-  }
-  if (allText.includes('miss') || allText.includes('thinking about') || allText.includes('want')) {
-    topics.push('feelings');
-  }
-  if (allText.includes('sexy') || allText.includes('bed') || allText.includes('tonight') || allText.includes('😏')) {
-    topics.push('flirty');
-  }
-  if (allText.includes('morning') || allText.includes('coffee') || allText.includes('wake')) {
-    topics.push('morning chat');
-  }
-  if (allText.includes('night') || allText.includes('sleep') || allText.includes('tired')) {
-    topics.push('evening chat');
-  }
-  
-  const topicStr = topics.length > 0 ? topics.join(', ') : 'casual';
-  
-  return `${date} ${time}: ${messageCount} messages, ${topicStr}`;
+  return `${date} ${time}: ${title} (${session.messages.length} messages)`;
 }
 
 // ============================================
-// FORMAT SESSION FOR CONTEXT
+// FORMAT SESSION FOR CONTEXT (current conversation)
 // ============================================
 
 export function formatSessionForContext(session: Session): string {
@@ -248,8 +448,8 @@ export async function getRecentSessionsSummary(bucket: R2Bucket): Promise<string
   const index = await getSessionIndex(bucket);
   const summaries: string[] = [];
   
-  for (const sessionId of index.recent_sessions.slice(0, 3)) {
-    const session = await getSession(bucket, sessionId);
+  for (const entry of index.archived_sessions.slice(0, 3)) {
+    const session = await getSession(bucket, entry.id);
     if (session && session.messages.length > 0) {
       summaries.push(summarizeSessionForMemory(session));
     }
@@ -259,21 +459,36 @@ export async function getRecentSessionsSummary(bucket: R2Bucket): Promise<string
 }
 
 // ============================================
-// CLEANUP OLD SESSIONS (call periodically)
+// CLEANUP OLD SESSIONS (5 month retention)
 // ============================================
 
 export async function cleanupOldSessions(bucket: R2Bucket): Promise<void> {
-  const fiveDaysAgo = new Date();
-  fiveDaysAgo.setDate(fiveDaysAgo.getDate() - 5);
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - SESSION_RETENTION_DAYS);
   
-  const listed = await bucket.list({ prefix: `${SESSION_PREFIX}/` });
+  const index = await getSessionIndex(bucket);
+  const sessionsToKeep: SessionIndexEntry[] = [];
+  const sessionsToDelete: string[] = [];
   
-  for (const obj of listed.objects) {
-    if (obj.key.endsWith('index.json')) continue;
-    
-    // Check if older than 5 days
-    if (obj.uploaded && obj.uploaded < fiveDaysAgo) {
-      await bucket.delete(obj.key);
+  for (const entry of index.archived_sessions) {
+    const sessionDate = new Date(entry.date);
+    if (sessionDate >= cutoffDate) {
+      sessionsToKeep.push(entry);
+    } else {
+      sessionsToDelete.push(entry.id);
     }
+  }
+  
+  // Delete old session files
+  for (const sessionId of sessionsToDelete) {
+    await bucket.delete(`${SESSION_PREFIX}/${sessionId}.json`);
+    console.log(`Deleted old session: ${sessionId}`);
+  }
+  
+  // Update index if we removed anything
+  if (sessionsToDelete.length > 0) {
+    index.archived_sessions = sessionsToKeep;
+    await saveSessionIndex(bucket, index);
+    console.log(`Cleaned up ${sessionsToDelete.length} sessions older than 5 months`);
   }
 }
