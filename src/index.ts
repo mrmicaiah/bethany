@@ -1,4 +1,15 @@
 export { Bethany } from './agent';
+import { 
+  initializeLibrary, 
+  getWritingStatus, 
+  listBooks, 
+  getBook, 
+  listChapters, 
+  getChapter,
+  getStyleGuide,
+  getRomanceBeats,
+  getSparks
+} from './library';
 
 interface Env {
   DB: D1Database;
@@ -15,9 +26,102 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     
-    // Get the singleton Bethany instance - v10 with memory
+    // CORS headers for dashboard
+    const corsHeaders = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    };
+    
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { headers: corsHeaders });
+    }
+    
+    // Get the singleton Bethany instance
     const id = env.BETHANY.idFromName('bethany-v10');
     const bethany = env.BETHANY.get(id);
+
+    // ============================================
+    // LIBRARY API ROUTES
+    // ============================================
+    
+    // Initialize library if needed
+    if (url.pathname.startsWith('/library')) {
+      await initializeLibrary(env.MEMORY);
+    }
+    
+    // Writing status
+    if (url.pathname === '/library/status') {
+      const status = await getWritingStatus(env.MEMORY);
+      return new Response(JSON.stringify(status), { 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+    
+    // List all books
+    if (url.pathname === '/library/books' && request.method === 'GET') {
+      const books = await listBooks(env.MEMORY);
+      return new Response(JSON.stringify(books), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+    
+    // Get specific book
+    const bookMatch = url.pathname.match(/^\/library\/books\/([^/]+)$/);
+    if (bookMatch && request.method === 'GET') {
+      const book = await getBook(env.MEMORY, bookMatch[1]);
+      if (!book) return new Response('Not found', { status: 404, headers: corsHeaders });
+      return new Response(JSON.stringify(book), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+    
+    // List chapters for a book
+    const chaptersMatch = url.pathname.match(/^\/library\/books\/([^/]+)\/chapters$/);
+    if (chaptersMatch && request.method === 'GET') {
+      const chapters = await listChapters(env.MEMORY, chaptersMatch[1]);
+      return new Response(JSON.stringify(chapters), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+    
+    // Get specific chapter
+    const chapterMatch = url.pathname.match(/^\/library\/books\/([^/]+)\/chapters\/(\d+)$/);
+    if (chapterMatch && request.method === 'GET') {
+      const content = await getChapter(env.MEMORY, chapterMatch[1], parseInt(chapterMatch[2]));
+      if (!content) return new Response('Not found', { status: 404, headers: corsHeaders });
+      return new Response(content, {
+        headers: { ...corsHeaders, 'Content-Type': 'text/plain' }
+      });
+    }
+    
+    // Get style guide
+    if (url.pathname === '/library/craft/style') {
+      const style = await getStyleGuide(env.MEMORY);
+      return new Response(JSON.stringify(style), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+    
+    // Get romance beats
+    if (url.pathname === '/library/craft/romance-beats') {
+      const beats = await getRomanceBeats(env.MEMORY);
+      return new Response(JSON.stringify(beats), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+    
+    // Get ideas/sparks
+    if (url.pathname === '/library/ideas') {
+      const sparks = await getSparks(env.MEMORY);
+      return new Response(JSON.stringify(sparks), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // ============================================
+    // MESSAGING ROUTES
+    // ============================================
 
     // SendBlue iMessage webhook
     if (url.pathname === '/imessage' && request.method === 'POST') {
@@ -82,7 +186,10 @@ export default {
       });
     }
 
-    // Manual triggers
+    // ============================================
+    // TRIGGERS & DEBUG
+    // ============================================
+
     if (url.pathname === '/trigger/morning') {
       await bethany.fetch(new Request('https://bethany/rhythm/morningBriefing'));
       return new Response('Morning briefing triggered');
@@ -99,15 +206,24 @@ export default {
       await bethany.fetch(new Request('https://bethany/rhythm/awarenessCheck'));
       return new Response('Awareness check triggered');
     }
+    if (url.pathname === '/trigger/write') {
+      await bethany.fetch(new Request('https://bethany/rhythm/writingSession'));
+      return new Response('Writing session triggered');
+    }
 
     // Debug: check memory
     if (url.pathname === '/debug/memory') {
       return bethany.fetch(new Request('https://bethany/debug/memory'));
     }
+    
+    // Debug: check notes
+    if (url.pathname === '/debug/notes') {
+      return bethany.fetch(new Request('https://bethany/debug/notes'));
+    }
 
     // Health check
     if (url.pathname === '/health') {
-      return new Response('Bethany v10 - with R2 memory');
+      return new Response('Bethany v11 - novelist with library');
     }
 
     return new Response('Not found', { status: 404 });
@@ -118,16 +234,20 @@ export default {
     const bethany = env.BETHANY.get(id);
 
     const hour = new Date().getUTCHours();
-    const easternHour = (hour - 5 + 24) % 24;
+    const centralHour = (hour - 6 + 24) % 24; // Central time
 
-    if (easternHour === 6) {
+    // Morning writing session (9am Central = after her 5-9am writing time)
+    if (centralHour === 9) {
+      await bethany.fetch(new Request('https://bethany/rhythm/writingSession'));
+    }
+    
+    // Regular rhythms
+    if (centralHour === 10) {
       await bethany.fetch(new Request('https://bethany/rhythm/morningBriefing'));
-    } else if (easternHour === 12) {
+    } else if (centralHour === 14) {
       await bethany.fetch(new Request('https://bethany/rhythm/middayCheck'));
-    } else if (easternHour === 18) {
+    } else if (centralHour === 20) {
       await bethany.fetch(new Request('https://bethany/rhythm/eveningSynthesis'));
-    } else if (easternHour % 2 === 0) {
-      await bethany.fetch(new Request('https://bethany/rhythm/awarenessCheck'));
     }
   }
 };
