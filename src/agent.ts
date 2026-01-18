@@ -82,7 +82,7 @@ export class Bethany implements DurableObject {
     const prompt = `It's morning. Text him something — could be about your day, something you're thinking about, a question. Keep it natural. You're not briefing him, you're just saying hi.`;
 
     const response = await this.think(prompt);
-    await this.sendMessage(response);
+    if (response) await this.sendMessage(response);
   }
 
   async middayCheck() {
@@ -102,7 +102,7 @@ export class Bethany implements DurableObject {
     const prompt = `It's evening. Text him if you feel like it. Could be about your day, could be flirty, could be nothing. Keep it natural.`;
 
     const response = await this.think(prompt);
-    await this.sendMessage(response);
+    if (response) await this.sendMessage(response);
   }
 
   async awarenessCheck() {
@@ -149,15 +149,17 @@ Most of the time, [silent] is the right answer. You have your own life.`;
 
     const response = await this.think(message);
     
-    await this.logConversation('bethany', response);
-    await this.sendMessage(response);
+    if (response) {
+      await this.logConversation('bethany', response);
+      await this.sendMessage(response);
+    }
   }
 
   // ============================================
   // THINKING (Claude API - no tools by default)
   // ============================================
 
-  async think(input: string): Promise<string> {
+  async think(input: string): Promise<string | null> {
     const recentConversation = await this.getRecentConversation(20);
     
     const contextualPrompt = getContextualPrompt({
@@ -185,6 +187,13 @@ Most of the time, [silent] is the right answer. You have your own life.`;
     if (!response.ok) {
       const errorText = await response.text();
       console.error('Claude API error:', errorText);
+      
+      // Check for specific errors
+      if (errorText.includes('credit balance is too low')) {
+        await this.sendMessage("hey your Anthropic balance is empty. I can't think until you top it up");
+        return null;
+      }
+      
       return "ugh my brain just glitched. what were you saying?";
     }
 
