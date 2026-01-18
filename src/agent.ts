@@ -1,5 +1,5 @@
 import { BETHANY_SYSTEM_PROMPT, getContextualPrompt } from './personality';
-import { loadHotMemory, loadPeople, formatMemoryForContext, initializeMemory } from './memory';
+import { loadHotMemory, loadPeople, formatMemoryForContext, initializeMemory, addSelfNote, SelfNote } from './memory';
 
 interface Env {
   DB: D1Database;
@@ -80,6 +80,14 @@ export class Bethany implements DurableObject {
         return new Response(formatted, { headers: { 'Content-Type': 'text/plain' } });
       }
       
+      // Debug endpoint to check self notes
+      if (url.pathname === '/debug/notes') {
+        const obj = await this.env.MEMORY.get('micaiah/self.json');
+        if (!obj) return new Response('No notes yet', { headers: { 'Content-Type': 'text/plain' } });
+        const data = await obj.text();
+        return new Response(data, { headers: { 'Content-Type': 'application/json' } });
+      }
+      
       return new Response('Not found', { status: 404 });
     } catch (error) {
       console.error('Error in Bethany DO:', error);
@@ -101,7 +109,10 @@ export class Bethany implements DurableObject {
     const prompt = `It's morning. Text him something — could be about your day, something you're thinking about, a question. Keep it natural. You're not briefing him, you're just saying hi.`;
 
     const response = await this.think(prompt);
-    if (response) await this.sendMessage(response);
+    if (response) {
+      const { message } = this.parseResponse(response);
+      await this.sendMessage(message);
+    }
   }
 
   async middayCheck() {
@@ -111,7 +122,8 @@ export class Bethany implements DurableObject {
 
     const response = await this.think(prompt);
     if (response && response.toLowerCase() !== 'silent' && response.toLowerCase() !== '[silent]') {
-      await this.sendMessage(response);
+      const { message } = this.parseResponse(response);
+      await this.sendMessage(message);
     }
   }
 
@@ -121,7 +133,10 @@ export class Bethany implements DurableObject {
     const prompt = `It's evening. Text him if you feel like it. Could be about your day, could be flirty, could be nothing. Keep it natural.`;
 
     const response = await this.think(prompt);
-    if (response) await this.sendMessage(response);
+    if (response) {
+      const { message } = this.parseResponse(response);
+      await this.sendMessage(message);
+    }
   }
 
   async awarenessCheck() {
@@ -133,7 +148,8 @@ Most of the time, [silent] is the right answer. You have your own life.`;
 
     const response = await this.think(prompt);
     if (response && !response.toLowerCase().includes('[silent]')) {
-      await this.sendMessage(response);
+      const { message } = this.parseResponse(response);
+      await this.sendMessage(message);
     }
   }
 
@@ -169,9 +185,34 @@ Most of the time, [silent] is the right answer. You have your own life.`;
     const response = await this.think(message);
     
     if (response) {
-      await this.logConversation('bethany', response);
-      await this.sendMessage(response);
+      const { message: textMessage, note } = this.parseResponse(response);
+      
+      // Save note if she added one
+      if (note) {
+        console.log('Bethany noted:', note);
+        await addSelfNote(this.env.MEMORY, 'observation', note, message);
+      }
+      
+      await this.logConversation('bethany', textMessage);
+      await this.sendMessage(textMessage);
     }
+  }
+
+  // ============================================
+  // PARSE RESPONSE FOR NOTES
+  // ============================================
+
+  parseResponse(response: string): { message: string; note: string | null } {
+    // Look for [note: ...] at the end
+    const noteMatch = response.match(/\[note:\s*(.+?)\]\s*$/i);
+    
+    if (noteMatch) {
+      const note = noteMatch[1].trim();
+      const message = response.replace(noteMatch[0], '').trim();
+      return { message, note };
+    }
+    
+    return { message: response, note: null };
   }
 
   // ============================================
