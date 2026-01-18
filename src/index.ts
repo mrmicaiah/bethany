@@ -14,8 +14,8 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     
-    // Get the singleton Bethany instance - v6 fresh personality
-    const id = env.BETHANY.idFromName('bethany-v6');
+    // Get the singleton Bethany instance - v8 short messages, no asterisks
+    const id = env.BETHANY.idFromName('bethany-v8');
     const bethany = env.BETHANY.get(id);
 
     // SendBlue iMessage webhook
@@ -101,14 +101,14 @@ export default {
 
     // Health check
     if (url.pathname === '/health') {
-      return new Response('Bethany v6 - fresh personality');
+      return new Response('Bethany v8 - short messages, no asterisks');
     }
 
     return new Response('Not found', { status: 404 });
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    const id = env.BETHANY.idFromName('bethany-v6');
+    const id = env.BETHANY.idFromName('bethany-v8');
     const bethany = env.BETHANY.get(id);
 
     const hour = new Date().getUTCHours();
