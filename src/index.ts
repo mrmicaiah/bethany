@@ -2,6 +2,7 @@ export { Bethany } from './agent';
 
 interface Env {
   DB: D1Database;
+  MEMORY: R2Bucket;
   BETHANY: DurableObjectNamespace;
   ANTHROPIC_API_KEY: string;
   SENDBLUE_API_KEY: string;
@@ -14,8 +15,8 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     
-    // Get the singleton Bethany instance - v9 one message only
-    const id = env.BETHANY.idFromName('bethany-v9');
+    // Get the singleton Bethany instance - v10 with memory
+    const id = env.BETHANY.idFromName('bethany-v10');
     const bethany = env.BETHANY.get(id);
 
     // SendBlue iMessage webhook
@@ -101,14 +102,14 @@ export default {
 
     // Health check
     if (url.pathname === '/health') {
-      return new Response('Bethany v9 - one message only');
+      return new Response('Bethany v10 - with memory');
     }
 
     return new Response('Not found', { status: 404 });
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    const id = env.BETHANY.idFromName('bethany-v9');
+    const id = env.BETHANY.idFromName('bethany-v10');
     const bethany = env.BETHANY.get(id);
 
     const hour = new Date().getUTCHours();
