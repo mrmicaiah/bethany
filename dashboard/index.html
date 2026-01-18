@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bethany's Library</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    
+    body {
+      font-family: 'Georgia', serif;
+      background: #faf9f7;
+      color: #2d2d2d;
+      line-height: 1.7;
+      padding: 2rem;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    
+    h1 {
+      font-size: 2rem;
+      margin-bottom: 0.5rem;
+      font-weight: normal;
+    }
+    
+    h2 {
+      font-size: 1.3rem;
+      margin: 2rem 0 1rem;
+      font-weight: normal;
+      color: #666;
+      border-bottom: 1px solid #e0e0e0;
+      padding-bottom: 0.5rem;
+    }
+    
+    h3 {
+      font-size: 1.1rem;
+      margin: 1.5rem 0 0.5rem;
+      font-weight: 600;
+    }
+    
+    .subtitle {
+      color: #888;
+      font-style: italic;
+      margin-bottom: 2rem;
+    }
+    
+    .status-card {
+      background: white;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    
+    .status-card .label {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #888;
+      margin-bottom: 0.25rem;
+    }
+    
+    .status-card .value {
+      font-size: 1.2rem;
+    }
+    
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 1rem;
+    }
+    
+    .status-item {
+      text-align: center;
+      padding: 1rem;
+      background: #f5f5f5;
+      border-radius: 6px;
+    }
+    
+    .status-item .number {
+      font-size: 1.8rem;
+      font-weight: 600;
+      color: #c45c3e;
+    }
+    
+    .book-card {
+      background: white;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin-bottom: 1rem;
+      cursor: pointer;
+      transition: box-shadow 0.2s;
+    }
+    
+    .book-card:hover {
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    
+    .book-card .title {
+      font-size: 1.3rem;
+      margin-bottom: 0.25rem;
+    }
+    
+    .book-card .genre {
+      font-size: 0.85rem;
+      color: #888;
+      margin-bottom: 0.75rem;
+    }
+    
+    .book-card .blurb {
+      font-style: italic;
+      color: #555;
+    }
+    
+    .book-card .stats {
+      margin-top: 1rem;
+      font-size: 0.85rem;
+      color: #888;
+    }
+    
+    .badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 0.2rem 0.5rem;
+      border-radius: 3px;
+      margin-left: 0.5rem;
+    }
+    
+    .badge.drafting { background: #fff3cd; color: #856404; }
+    .badge.revising { background: #cce5ff; color: #004085; }
+    .badge.complete { background: #d4edda; color: #155724; }
+    .badge.published { background: #c45c3e; color: white; }
+    
+    .chapter-list {
+      list-style: none;
+    }
+    
+    .chapter-list li {
+      padding: 0.75rem 0;
+      border-bottom: 1px solid #eee;
+    }
+    
+    .chapter-list li:last-child {
+      border-bottom: none;
+    }
+    
+    .chapter-list a {
+      color: #2d2d2d;
+      text-decoration: none;
+    }
+    
+    .chapter-list a:hover {
+      color: #c45c3e;
+    }
+    
+    .chapter-list .word-count {
+      float: right;
+      color: #888;
+      font-size: 0.85rem;
+    }
+    
+    .chapter-content {
+      background: white;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 2rem;
+      font-size: 1.05rem;
+    }
+    
+    .chapter-content p {
+      margin-bottom: 1rem;
+      text-indent: 1.5rem;
+    }
+    
+    .chapter-content p:first-child {
+      text-indent: 0;
+    }
+    
+    .nav {
+      margin-bottom: 2rem;
+      font-size: 0.9rem;
+    }
+    
+    .nav a {
+      color: #c45c3e;
+      text-decoration: none;
+    }
+    
+    .nav a:hover {
+      text-decoration: underline;
+    }
+    
+    .spark-card {
+      background: #fffdf0;
+      border-left: 3px solid #f0c040;
+      padding: 1rem;
+      margin-bottom: 0.75rem;
+    }
+    
+    .spark-card .type {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      color: #888;
+    }
+    
+    .craft-section {
+      background: white;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    
+    .craft-section ul {
+      margin-left: 1.5rem;
+    }
+    
+    .craft-section li {
+      margin-bottom: 0.5rem;
+    }
+    
+    .loading {
+      text-align: center;
+      padding: 3rem;
+      color: #888;
+    }
+    
+    .error {
+      background: #fee;
+      border: 1px solid #fcc;
+      padding: 1rem;
+      border-radius: 6px;
+      color: #c00;
+    }
+    
+    @media (max-width: 600px) {
+      body { padding: 1rem; }
+      h1 { font-size: 1.5rem; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="loading">Loading...</div>
+  </div>
+  
+  <script>
+    const API_BASE = 'https://bethany.micaiah-tasks.workers.dev';
+    
+    // Simple router
+    function getRoute() {
+      const hash = window.location.hash.slice(1) || '/';
+      return hash;
+    }
+    
+    async function fetchAPI(path) {
+      const res = await fetch(`${API_BASE}${path}`);
+      if (!res.ok) throw new Error(`API error: ${res.status}`);
+      const text = await res.text();
+      try {
+        return JSON.parse(text);
+      } catch {
+        return text;
+      }
+    }
+    
+    // Views
+    async function renderHome() {
+      try {
+        const [status, books] = await Promise.all([
+          fetchAPI('/library/status'),
+          fetchAPI('/library/books'),
+        ]);
+        
+        const currentBook = books.find(b => b.id === status.current_project);
+        
+        return `
+          <h1>Bethany's Library</h1>
+          <p class="subtitle">Romance novelist. Bestselling, allegedly.</p>
+          
+          <div class="status-card">
+            <div class="label">Currently Writing</div>
+            <div class="value">${currentBook ? currentBook.title : 'Nothing right now'}</div>
+          </div>
+          
+          <div class="status-grid">
+            <div class="status-item">
+              <div class="number">${status.word_count_today.toLocaleString()}</div>
+              <div class="label">Words Today</div>
+            </div>
+            <div class="status-item">
+              <div class="number">${status.streak}</div>
+              <div class="label">Day Streak</div>
+            </div>
+            <div class="status-item">
+              <div class="number">${status.chapter_in_progress}</div>
+              <div class="label">Chapter</div>
+            </div>
+            <div class="status-item">
+              <div class="number">${status.mode}</div>
+              <div class="label">Mode</div>
+            </div>
+          </div>
+          
+          <h2>Books</h2>
+          ${books.map(book => `
+            <div class="book-card" onclick="window.location.hash='/books/${book.id}'">
+              <div class="title">
+                ${book.title}
+                <span class="badge ${book.status}">${book.status}</span>
+              </div>
+              <div class="genre">${book.genre}${book.subgenre ? ' · ' + book.subgenre : ''}</div>
+              <div class="blurb">${book.blurb}</div>
+              <div class="stats">${book.word_count.toLocaleString()} words · ${book.chapter_count} chapters</div>
+            </div>
+          `).join('')}
+          
+          <h2>Quick Links</h2>
+          <p><a href="#/craft">Her Craft</a> · <a href="#/ideas">Ideas & Sparks</a></p>
+        `;
+      } catch (err) {
+        return `<div class="error">Failed to load: ${err.message}</div>`;
+      }
+    }
+    
+    async function renderBook(bookId) {
+      try {
+        const [book, chapters] = await Promise.all([
+          fetchAPI(`/library/books/${bookId}`),
+          fetchAPI(`/library/books/${bookId}/chapters`),
+        ]);
+        
+        return `
+          <div class="nav"><a href="#/">← Back to Library</a></div>
+          
+          <h1>${book.title}</h1>
+          <p class="subtitle">${book.genre}${book.subgenre ? ' · ' + book.subgenre : ''}</p>
+          
+          <div class="status-card">
+            <p style="font-style: italic">${book.blurb}</p>
+            <p style="margin-top: 1rem; font-size: 0.9rem; color: #888">
+              ${book.word_count.toLocaleString()} words · ${book.chapter_count} chapters · ${book.status}
+            </p>
+          </div>
+          
+          <h2>Chapters</h2>
+          ${chapters.length === 0 ? '<p>No chapters yet.</p>' : `
+            <ul class="chapter-list">
+              ${chapters.map(ch => `
+                <li>
+                  <a href="#/books/${bookId}/${ch.number}">
+                    Chapter ${ch.number}${ch.title ? ': ' + ch.title : ''}
+                  </a>
+                  <span class="word-count">${ch.word_count.toLocaleString()} words</span>
+                </li>
+              `).join('')}
+            </ul>
+          `}
+        `;
+      } catch (err) {
+        return `<div class="error">Failed to load book: ${err.message}</div>`;
+      }
+    }
+    
+    async function renderChapter(bookId, chapterNum) {
+      try {
+        const [book, content] = await Promise.all([
+          fetchAPI(`/library/books/${bookId}`),
+          fetchAPI(`/library/books/${bookId}/chapters/${chapterNum}`),
+        ]);
+        
+        // Convert markdown-ish to HTML paragraphs
+        const html = content
+          .split('\n\n')
+          .map(p => `<p>${p.trim()}</p>`)
+          .join('');
+        
+        return `
+          <div class="nav">
+            <a href="#/books/${bookId}">← Back to ${book.title}</a>
+          </div>
+          
+          <h1>Chapter ${chapterNum}</h1>
+          <p class="subtitle">${book.title}</p>
+          
+          <div class="chapter-content">
+            ${html}
+          </div>
+          
+          <div style="margin-top: 2rem; text-align: center">
+            ${parseInt(chapterNum) > 1 ? `<a href="#/books/${bookId}/${parseInt(chapterNum) - 1}">← Previous</a>` : ''}
+            <a href="#/books/${bookId}/${parseInt(chapterNum) + 1}" style="margin-left: 2rem">Next →</a>
+          </div>
+        `;
+      } catch (err) {
+        return `<div class="error">Failed to load chapter: ${err.message}</div>`;
+      }
+    }
+    
+    async function renderCraft() {
+      try {
+        const [style, beats] = await Promise.all([
+          fetchAPI('/library/craft/style'),
+          fetchAPI('/library/craft/romance-beats'),
+        ]);
+        
+        return `
+          <div class="nav"><a href="#/">← Back to Library</a></div>
+          
+          <h1>Her Craft</h1>
+          <p class="subtitle">How Bethany writes.</p>
+          
+          <div class="craft-section">
+            <h3>Voice</h3>
+            <ul>${style.voice.map(v => `<li>${v}</li>`).join('')}</ul>
+          </div>
+          
+          <div class="craft-section">
+            <h3>POV</h3>
+            <p>${style.pov_preference}</p>
+          </div>
+          
+          <div class="craft-section">
+            <h3>Sentence Rhythm</h3>
+            <p>${style.sentence_rhythm}</p>
+          </div>
+          
+          <div class="craft-section">
+            <h3>Dialogue Style</h3>
+            <p>${style.dialogue_style}</p>
+          </div>
+          
+          <div class="craft-section">
+            <h3>Things She Does</h3>
+            <ul>${style.things_i_do.map(t => `<li>${t}</li>`).join('')}</ul>
+          </div>
+          
+          <div class="craft-section">
+            <h3>Things She Avoids</h3>
+            <ul>${style.things_i_avoid.map(t => `<li>${t}</li>`).join('')}</ul>
+          </div>
+          
+          <div class="craft-section">
+            <h3>Influences</h3>
+            <ul>${style.influences.map(i => `<li>${i}</li>`).join('')}</ul>
+          </div>
+          
+          <div class="craft-section">
+            <h3>Signature Moves</h3>
+            <ul>${style.signature_moves.map(m => `<li>${m}</li>`).join('')}</ul>
+          </div>
+          
+          <h2>Romance Beats</h2>
+          
+          <div class="craft-section">
+            <h3>Meet Cute</h3>
+            <p>${beats.meet_cute}</p>
+          </div>
+          
+          <div class="craft-section">
+            <h3>Building Tension</h3>
+            <p>${beats.building_tension}</p>
+          </div>
+          
+          <div class="craft-section">
+            <h3>First Kiss</h3>
+            <p>${beats.first_kiss}</p>
+          </div>
+          
+          <div class="craft-section">
+            <h3>The Dark Moment</h3>
+            <p>${beats.dark_moment}</p>
+          </div>
+          
+          <div class="craft-section">
+            <h3>Heat Level</h3>
+            <p>${beats.heat_level}</p>
+          </div>
+        `;
+      } catch (err) {
+        return `<div class="error">Failed to load craft: ${err.message}</div>`;
+      }
+    }
+    
+    async function renderIdeas() {
+      try {
+        const sparks = await fetchAPI('/library/ideas');
+        
+        return `
+          <div class="nav"><a href="#/">← Back to Library</a></div>
+          
+          <h1>Ideas & Sparks</h1>
+          <p class="subtitle">Things she's collecting.</p>
+          
+          ${sparks.length === 0 ? '<p>No sparks yet.</p>' : sparks.map(s => `
+            <div class="spark-card">
+              <div class="type">${s.type}</div>
+              <p>${s.spark}</p>
+              ${s.source ? `<div class="type" style="margin-top: 0.5rem">from: ${s.source}</div>` : ''}
+            </div>
+          `).join('')}
+        `;
+      } catch (err) {
+        return `<div class="error">Failed to load ideas: ${err.message}</div>`;
+      }
+    }
+    
+    // Router
+    async function render() {
+      const app = document.getElementById('app');
+      app.innerHTML = '<div class="loading">Loading...</div>';
+      
+      const route = getRoute();
+      let html;
+      
+      if (route === '/') {
+        html = await renderHome();
+      } else if (route === '/craft') {
+        html = await renderCraft();
+      } else if (route === '/ideas') {
+        html = await renderIdeas();
+      } else if (route.match(/^\/books\/([^/]+)\/(\d+)$/)) {
+        const [, bookId, chapter] = route.match(/^\/books\/([^/]+)\/(\d+)$/);
+        html = await renderChapter(bookId, chapter);
+      } else if (route.match(/^\/books\/([^/]+)$/)) {
+        const [, bookId] = route.match(/^\/books\/([^/]+)$/);
+        html = await renderBook(bookId);
+      } else {
+        html = '<div class="error">Page not found</div>';
+      }
+      
+      app.innerHTML = html;
+    }
+    
+    window.addEventListener('hashchange', render);
+    render();
+  </script>
+</body>
+</html>
