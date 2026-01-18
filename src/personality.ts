@@ -72,6 +72,14 @@ export const getContextualPrompt = (context: {
   currentTime: Date;
   lastConversation: any[];
 }) => {
+  // Convert to Central Time
+  const centralTime = context.currentTime.toLocaleString('en-US', { 
+    timeZone: 'America/Chicago',
+    weekday: 'short', 
+    hour: 'numeric', 
+    minute: '2-digit' 
+  });
+
   const slimConvo = context.lastConversation?.slice(-10).map(m => {
     if (m.role === 'bethany') {
       return `You said: ${m.content}`;
@@ -80,7 +88,7 @@ export const getContextualPrompt = (context: {
     }
   }).join('\n');
 
-  return `Time: ${context.currentTime.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })}
+  return `Time: ${centralTime}
 
 Recent texts:
 ${slimConvo || '(starting fresh)'}`;
