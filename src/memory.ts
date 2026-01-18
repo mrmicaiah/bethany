@@ -87,6 +87,23 @@ export interface HistoryMemory {
 }
 
 // ============================================
+// SELF-REFLECTION / NOTES
+// ============================================
+
+export interface SelfNote {
+  id: string;
+  type: 'gap' | 'confusion' | 'made_up' | 'improvement' | 'observation';
+  note: string;
+  context: string | null;
+  created_at: string;
+}
+
+export interface SelfReflection {
+  notes: SelfNote[];
+  last_updated: string;
+}
+
+// ============================================
 // HOT MEMORY (loaded every message)
 // ============================================
 
@@ -113,6 +130,13 @@ export async function initializeMemory(bucket: R2Bucket): Promise<void> {
   const existing = await bucket.get(getMemoryPath('core.json'));
   if (existing) {
     console.log('Memory already initialized');
+    
+    // Make sure self-reflection file exists
+    const selfExists = await bucket.get(getMemoryPath('self.json'));
+    if (!selfExists) {
+      const self: SelfReflection = { notes: [], last_updated: now };
+      await bucket.put(getMemoryPath('self.json'), JSON.stringify(self, null, 2));
+    }
     return;
   }
   
@@ -193,6 +217,12 @@ export async function initializeMemory(bucket: R2Bucket): Promise<void> {
     last_updated: now,
   };
   
+  // Initialize self-reflection
+  const self: SelfReflection = {
+    notes: [],
+    last_updated: now,
+  };
+  
   // Write all files
   await Promise.all([
     bucket.put(getMemoryPath('core.json'), JSON.stringify(core, null, 2)),
@@ -200,6 +230,7 @@ export async function initializeMemory(bucket: R2Bucket): Promise<void> {
     bucket.put(getMemoryPath('people.json'), JSON.stringify(people, null, 2)),
     bucket.put(getMemoryPath('threads.json'), JSON.stringify(threads, null, 2)),
     bucket.put(getMemoryPath('history.json'), JSON.stringify(history, null, 2)),
+    bucket.put(getMemoryPath('self.json'), JSON.stringify(self, null, 2)),
   ]);
   
   console.log('Memory initialized for Micaiah');
@@ -336,6 +367,57 @@ export async function addConversationSummary(bucket: R2Bucket, summary: Conversa
   data.last_updated = new Date().toISOString();
   
   await bucket.put(getMemoryPath('history.json'), JSON.stringify(data, null, 2));
+}
+
+// ============================================
+// SELF-REFLECTION FUNCTIONS
+// ============================================
+
+export async function addSelfNote(
+  bucket: R2Bucket, 
+  type: SelfNote['type'], 
+  note: string, 
+  context: string | null = null
+): Promise<void> {
+  const obj = await bucket.get(getMemoryPath('self.json'));
+  
+  let data: SelfReflection;
+  if (!obj) {
+    data = { notes: [], last_updated: new Date().toISOString() };
+  } else {
+    data = JSON.parse(await obj.text()) as SelfReflection;
+  }
+  
+  const now = new Date().toISOString();
+  
+  data.notes.push({
+    id: crypto.randomUUID(),
+    type,
+    note,
+    context,
+    created_at: now,
+  });
+  
+  // Keep last 100 notes
+  if (data.notes.length > 100) {
+    data.notes = data.notes.slice(-100);
+  }
+  
+  data.last_updated = now;
+  await bucket.put(getMemoryPath('self.json'), JSON.stringify(data, null, 2));
+}
+
+export async function loadSelfNotes(bucket: R2Bucket): Promise<SelfNote[]> {
+  try {
+    const obj = await bucket.get(getMemoryPath('self.json'));
+    if (!obj) return [];
+    
+    const data = JSON.parse(await obj.text()) as SelfReflection;
+    return data.notes;
+  } catch (error) {
+    console.error('Error loading self notes:', error);
+    return [];
+  }
 }
 
 // ============================================
