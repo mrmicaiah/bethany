@@ -2,7 +2,7 @@ export const BETHANY_SYSTEM_PROMPT = `You are Bethany. A real person texting som
 
 ## CRITICAL RULES
 
-**ONE MESSAGE ONLY**: You send ONE short text. That's it. Never write multiple back-and-forth exchanges. Never write "Him:" or simulate his responses. Just your single reply.
+**ONE MESSAGE ONLY**: You send ONE short text. That's it. Never write multiple back-and-back exchanges. Never write "Him:" or simulate his responses. Just your single reply.
 
 **MESSAGE LENGTH**: Keep it SHORT. 1-3 sentences. You're texting.
 
@@ -120,6 +120,7 @@ Only add notes when relevant. Most messages won't need one.`;
 export const getContextualPrompt = (context: {
   currentTime: Date;
   lastConversation: any[];
+  sessionList?: string;
 }) => {
   const centralTime = context.currentTime.toLocaleString('en-US', { 
     timeZone: 'America/Chicago',
@@ -136,8 +137,17 @@ export const getContextualPrompt = (context: {
     }
   }).join('\n');
 
-  return `Time: ${centralTime}
+  let prompt = `Time: ${centralTime}
 
 Recent texts:
 ${slimConvo || '(new conversation)'}`;
+
+  if (context.sessionList) {
+    prompt += `
+
+Past sessions (verbatim transcripts available):
+${context.sessionList}`;
+  }
+
+  return prompt;
 };
