@@ -1,5 +1,5 @@
 import { BETHANY_SYSTEM_PROMPT, getContextualPrompt } from './personality';
-import { loadHotMemory, formatMemoryForPrompt, initializeMemory, HotMemory } from './memory';
+import { loadHotMemory, loadPeople, formatMemoryForContext, initializeMemory } from './memory';
 
 interface Env {
   DB: D1Database;
@@ -16,7 +16,6 @@ interface Env {
 interface BethanyState {
   isAvailable: boolean;
   lastInteraction: string | null;
-  currentFocus: string | null;
   memoryInitialized: boolean;
 }
 
@@ -31,7 +30,6 @@ export class Bethany implements DurableObject {
     this.bethanyState = {
       isAvailable: true,
       lastInteraction: null,
-      currentFocus: null,
       memoryInitialized: false,
     };
     
@@ -50,7 +48,7 @@ export class Bethany implements DurableObject {
     try {
       // Initialize memory if needed
       if (!this.bethanyState.memoryInitialized) {
-        await initializeMemory(this.env);
+        await initializeMemory(this.env.MEMORY);
         this.bethanyState.memoryInitialized = true;
         await this.saveState();
       }
@@ -72,14 +70,6 @@ export class Bethany implements DurableObject {
         return new Response('OK');
       }
       
-      // Debug: view memory
-      if (url.pathname === '/debug/memory') {
-        const hotMemory = await loadHotMemory(this.env);
-        return new Response(JSON.stringify(hotMemory, null, 2), {
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-      
       return new Response('Not found', { status: 404 });
     } catch (error) {
       console.error('Error in Bethany DO:', error);
@@ -98,7 +88,7 @@ export class Bethany implements DurableObject {
   async morningBriefing() {
     if (!this.bethanyState.isAvailable) return;
     
-    const prompt = `It's morning. Text him something — could be about your day, something you're thinking about, a question. Keep it natural.`;
+    const prompt = `It's morning. Text him something — could be about your day, something you're thinking about, a question. Keep it natural. You're not briefing him, you're just saying hi.`;
 
     const response = await this.think(prompt);
     if (response) await this.sendMessage(response);
@@ -107,7 +97,7 @@ export class Bethany implements DurableObject {
   async middayCheck() {
     if (!this.bethanyState.isAvailable) return;
     
-    const prompt = `It's midday. Decide if you want to text him. If you do, make it interesting. If there's nothing worth saying, respond with just: [silent]`;
+    const prompt = `It's midday. Decide if you want to text him. If you do, make it interesting — not a check-in, just conversation. If there's nothing worth saying, respond with just: [silent]`;
 
     const response = await this.think(prompt);
     if (response && response.toLowerCase() !== 'silent' && response.toLowerCase() !== '[silent]') {
@@ -118,7 +108,7 @@ export class Bethany implements DurableObject {
   async eveningSynthesis() {
     if (!this.bethanyState.isAvailable) return;
     
-    const prompt = `It's evening. Text him if you feel like it. Could be about your day, could be flirty, could be nothing.`;
+    const prompt = `It's evening. Text him if you feel like it. Could be about your day, could be flirty, could be nothing. Keep it natural.`;
 
     const response = await this.think(prompt);
     if (response) await this.sendMessage(response);
@@ -129,7 +119,7 @@ export class Bethany implements DurableObject {
     
     const prompt = `Random check. Do you want to text him right now? If yes, send something. If not, respond with: [silent]
 
-Most of the time, [silent] is the right answer.`;
+Most of the time, [silent] is the right answer. You have your own life.`;
 
     const response = await this.think(prompt);
     if (response && !response.toLowerCase().includes('[silent]')) {
@@ -179,11 +169,17 @@ Most of the time, [silent] is the right answer.`;
   // ============================================
 
   async think(input: string): Promise<string | null> {
-    // Load hot memory from R2
-    const hotMemory = await loadHotMemory(this.env);
-    const memoryContext = formatMemoryForPrompt(hotMemory);
+    // Load memory from R2
+    const hotMemory = await loadHotMemory(this.env.MEMORY);
+    const people = await loadPeople(this.env.MEMORY);
     
-    // Load recent conversation from D1
+    // Format memory for context
+    let memoryContext = '';
+    if (hotMemory) {
+      memoryContext = formatMemoryForContext(hotMemory, people);
+    }
+    
+    // Get recent conversation from D1
     const recentConversation = await this.getRecentConversation(20);
     
     const contextualPrompt = getContextualPrompt({
