@@ -20,7 +20,7 @@ name = "BETHANY"
 class_name = "Bethany"
 
 [[migrations]]
-tag = "v1"
+tag = "v2"
 new_sqlite_classes = ["Bethany"]
 
 # Scheduled triggers - runs every hour
