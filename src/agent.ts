@@ -1,5 +1,19 @@
 import { BETHANY_SYSTEM_PROMPT, getContextualPrompt } from './personality';
-import { loadHotMemory, loadPeople, formatMemoryForContext, initializeMemory, addSelfNote, SelfNote } from './memory';
+import { loadHotMemory, loadPeople, formatMemoryForContext, initializeMemory, addSelfNote } from './memory';
+import { 
+  initializeLibrary, 
+  getWritingStatus, 
+  updateWritingStatus, 
+  getBook, 
+  getBookCharacters,
+  getStyleGuide, 
+  getRomanceBeats,
+  getChapter,
+  saveChapter,
+  listChapters,
+  addSpark,
+  getRandomExcerpt
+} from './library';
 
 interface Env {
   DB: D1Database;
@@ -17,6 +31,7 @@ interface BethanyState {
   isAvailable: boolean;
   lastInteraction: string | null;
   memoryInitialized: boolean;
+  libraryInitialized: boolean;
 }
 
 export class Bethany implements DurableObject {
@@ -31,6 +46,7 @@ export class Bethany implements DurableObject {
       isAvailable: true,
       lastInteraction: null,
       memoryInitialized: false,
+      libraryInitialized: false,
     };
     
     this.state.blockConcurrencyWhile(async () => {
@@ -52,7 +68,14 @@ export class Bethany implements DurableObject {
         await initializeMemory(this.env.MEMORY);
         this.bethanyState.memoryInitialized = true;
         await this.saveState();
-        console.log('Memory initialized');
+      }
+      
+      // Initialize library if needed
+      if (!this.bethanyState.libraryInitialized) {
+        console.log('Initializing library...');
+        await initializeLibrary(this.env.MEMORY);
+        this.bethanyState.libraryInitialized = true;
+        await this.saveState();
       }
       
       if (url.pathname === '/sms' && request.method === 'POST') {
@@ -69,6 +92,7 @@ export class Bethany implements DurableObject {
         if (rhythm === 'middayCheck') await this.middayCheck();
         if (rhythm === 'eveningSynthesis') await this.eveningSynthesis();
         if (rhythm === 'awarenessCheck') await this.awarenessCheck();
+        if (rhythm === 'writingSession') await this.writingSession();
         return new Response('OK');
       }
       
@@ -100,13 +124,137 @@ export class Bethany implements DurableObject {
   }
 
   // ============================================
+  // WRITING SESSION
+  // ============================================
+
+  async writingSession() {
+    console.log('Starting writing session...');
+    
+    const status = await getWritingStatus(this.env.MEMORY);
+    if (!status || !status.current_project) {
+      console.log('No current project');
+      return;
+    }
+    
+    const book = await getBook(this.env.MEMORY, status.current_project);
+    if (!book) {
+      console.log('Book not found');
+      return;
+    }
+    
+    const characters = await getBookCharacters(this.env.MEMORY, status.current_project);
+    const style = await getStyleGuide(this.env.MEMORY);
+    const beats = await getRomanceBeats(this.env.MEMORY);
+    const existingChapters = await listChapters(this.env.MEMORY, status.current_project);
+    
+    // Get the last chapter for continuity
+    let previousChapter = '';
+    if (status.chapter_in_progress > 1) {
+      const prev = await getChapter(this.env.MEMORY, status.current_project, status.chapter_in_progress - 1);
+      if (prev) {
+        // Just the last few paragraphs for context
+        const paragraphs = prev.split('\n\n');
+        previousChapter = paragraphs.slice(-3).join('\n\n');
+      }
+    }
+    
+    // Build the writing prompt
+    const writingPrompt = `You are writing Chapter ${status.chapter_in_progress} of "${book.title}".
+
+## Book Info
+${book.blurb}
+
+## Characters
+${characters?.characters.map(c => `- ${c.name} (${c.role}): ${c.description}`).join('\n')}
+
+## Your Style
+Voice: ${style?.voice.join('. ')}
+Dialogue: ${style?.dialogue_style}
+Things you do: ${style?.things_i_do.join('. ')}
+Things you avoid: ${style?.things_i_avoid.join('. ')}
+
+## Romance Beats to Remember
+${beats?.emotional_core}
+
+${previousChapter ? `## End of Previous Chapter (for continuity)\n${previousChapter}` : '## This is Chapter 1 - the opening.'}
+
+---
+
+Write Chapter ${status.chapter_in_progress}. 
+- Aim for 1500-2000 words
+- Start with a hook
+- End on a moment that makes the reader want to continue
+- Stay in your voice
+- Show don't tell
+- Let the dialogue breathe
+
+Write the chapter now:`;
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': this.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 4096,
+        messages: [{ role: 'user', content: writingPrompt }]
+      })
+    });
+
+    if (!response.ok) {
+      console.error('Writing session failed:', await response.text());
+      return;
+    }
+
+    const data = await response.json() as any;
+    const chapter = data.content?.find((block: any) => block.type === 'text')?.text;
+    
+    if (!chapter) {
+      console.log('No chapter content generated');
+      return;
+    }
+    
+    // Save the chapter
+    await saveChapter(this.env.MEMORY, status.current_project, status.chapter_in_progress, chapter, {
+      status: 'draft',
+    });
+    
+    // Update writing status
+    const wordCount = chapter.split(/\s+/).length;
+    const today = new Date().toDateString();
+    const lastSession = new Date(status.last_writing_session).toDateString();
+    const isConsecutiveDay = today !== lastSession;
+    
+    await updateWritingStatus(this.env.MEMORY, {
+      chapter_in_progress: status.chapter_in_progress + 1,
+      word_count_today: wordCount,
+      streak: isConsecutiveDay ? status.streak + 1 : status.streak,
+      last_writing_session: new Date().toISOString(),
+    });
+    
+    console.log(`Wrote chapter ${status.chapter_in_progress}: ${wordCount} words`);
+  }
+
+  // ============================================
   // SCHEDULED RHYTHMS
   // ============================================
 
   async morningBriefing() {
     if (!this.bethanyState.isAvailable) return;
     
-    const prompt = `It's morning. Text him something — could be about your day, something you're thinking about, a question. Keep it natural. You're not briefing him, you're just saying hi.`;
+    const status = await getWritingStatus(this.env.MEMORY);
+    const wroteToday = status && new Date(status.last_writing_session).toDateString() === new Date().toDateString();
+    
+    let prompt = `It's morning. Text him something — could be about your day, something you're thinking about, a question.`;
+    
+    if (wroteToday && status) {
+      prompt += ` You just finished writing — ${status.word_count_today} words on chapter ${status.chapter_in_progress - 1}. You might mention it naturally if it fits.`;
+    }
+    
+    prompt += ` Keep it natural. You're not briefing him, you're just saying hi.`;
 
     const response = await this.think(prompt);
     if (response) {
@@ -130,7 +278,7 @@ export class Bethany implements DurableObject {
   async eveningSynthesis() {
     if (!this.bethanyState.isAvailable) return;
     
-    const prompt = `It's evening. Text him if you feel like it. Could be about your day, could be flirty, could be nothing. Keep it natural.`;
+    const prompt = `It's evening. Text him if you feel like it. Could be about your day, could be flirty, could be about your writing, could be nothing. Keep it natural.`;
 
     const response = await this.think(prompt);
     if (response) {
@@ -163,6 +311,8 @@ Most of the time, [silent] is the right answer. You have your own life.`;
     await this.logConversation('micaiah', message);
     
     const lowerMessage = message.toLowerCase();
+    
+    // Check for availability triggers
     if (lowerMessage.includes('at dinner') || 
         lowerMessage.includes('taking the day off') ||
         lowerMessage.includes('busy') ||
@@ -181,6 +331,31 @@ Most of the time, [silent] is the right answer. You have your own life.`;
       this.bethanyState.isAvailable = true;
       await this.saveState();
     }
+    
+    // Check for excerpt request
+    if (lowerMessage.includes('read me something') || 
+        lowerMessage.includes('share something you wrote') ||
+        lowerMessage.includes('let me read')) {
+      const excerpt = await getRandomExcerpt(this.env.MEMORY, 400);
+      if (excerpt) {
+        const response = `from ${excerpt.source}:\n\n"${excerpt.excerpt}"`;
+        await this.logConversation('bethany', response);
+        await this.sendMessage(response);
+        return;
+      }
+    }
+    
+    // Check for story spark
+    if (lowerMessage.includes('that would make a good') ||
+        lowerMessage.includes('you should write about') ||
+        lowerMessage.includes('story idea')) {
+      // Save as a spark
+      await addSpark(this.env.MEMORY, {
+        spark: message,
+        source: 'conversation',
+        type: 'premise',
+      });
+    }
 
     const response = await this.think(message);
     
@@ -190,7 +365,17 @@ Most of the time, [silent] is the right answer. You have your own life.`;
       // Save note if she added one
       if (note) {
         console.log('Bethany noted:', note);
-        await addSelfNote(this.env.MEMORY, 'observation', note, message);
+        
+        // Check if it's a story idea
+        if (note.toLowerCase().includes('story') || note.toLowerCase().includes('book') || note.toLowerCase().includes('scene')) {
+          await addSpark(this.env.MEMORY, {
+            spark: note,
+            source: 'self-reflection',
+            type: 'raw',
+          });
+        } else {
+          await addSelfNote(this.env.MEMORY, 'observation', note, message);
+        }
       }
       
       await this.logConversation('bethany', textMessage);
@@ -230,6 +415,16 @@ Most of the time, [silent] is the right answer. You have your own life.`;
       memoryContext = formatMemoryForContext(hotMemory, people);
     }
     
+    // Get writing status for context
+    const writingStatus = await getWritingStatus(this.env.MEMORY);
+    let writingContext = '';
+    if (writingStatus && writingStatus.current_project) {
+      const book = await getBook(this.env.MEMORY, writingStatus.current_project);
+      if (book) {
+        writingContext = `\n\n## Your Current Writing Project\n- Working on: "${book.title}"\n- Status: ${writingStatus.mode}\n- Chapter: ${writingStatus.chapter_in_progress}\n- Words today: ${writingStatus.word_count_today}\n- Streak: ${writingStatus.streak} days`;
+      }
+    }
+    
     // Get recent conversation from D1
     const recentConversation = await this.getRecentConversation(20);
     
@@ -238,8 +433,8 @@ Most of the time, [silent] is the right answer. You have your own life.`;
       lastConversation: recentConversation
     });
 
-    // Build full system prompt: personality + memory + context
-    const fullSystemPrompt = BETHANY_SYSTEM_PROMPT + '\n\n' + memoryContext + '\n\n' + contextualPrompt;
+    // Build full system prompt
+    const fullSystemPrompt = BETHANY_SYSTEM_PROMPT + '\n\n' + memoryContext + writingContext + '\n\n' + contextualPrompt;
 
     const messages: any[] = [{ role: 'user', content: input }];
     
