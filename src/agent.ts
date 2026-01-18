@@ -25,6 +25,7 @@ import {
   getSessionTranscript,
   archiveSession,
   cleanupOldSessions,
+  Session,
   SessionCheckResult
 } from './sessions';
 
@@ -45,6 +46,9 @@ interface BethanyState {
   lastInteraction: string | null;
   memoryInitialized: boolean;
   libraryInitialized: boolean;
+  // Proactive outreach tracking
+  outreachesToday: number;
+  lastOutreachDate: string | null;  // YYYY-MM-DD
 }
 
 export class Bethany implements DurableObject {
@@ -60,12 +64,14 @@ export class Bethany implements DurableObject {
       lastInteraction: null,
       memoryInitialized: false,
       libraryInitialized: false,
+      outreachesToday: 0,
+      lastOutreachDate: null,
     };
     
     this.state.blockConcurrencyWhile(async () => {
       const stored = await this.state.storage.get<BethanyState>('bethanyState');
       if (stored) {
-        this.bethanyState = stored;
+        this.bethanyState = { ...this.bethanyState, ...stored };
       }
     });
   }
@@ -101,12 +107,9 @@ export class Bethany implements DurableObject {
       if (url.pathname.startsWith('/rhythm/')) {
         const rhythm = url.pathname.replace('/rhythm/', '');
         console.log('Running rhythm:', rhythm);
-        if (rhythm === 'morningBriefing') await this.morningBriefing();
-        if (rhythm === 'middayCheck') await this.middayCheck();
-        if (rhythm === 'eveningSynthesis') await this.eveningSynthesis();
-        if (rhythm === 'awarenessCheck') await this.awarenessCheck();
         if (rhythm === 'writingSession') await this.writingSession();
         if (rhythm === 'sessionCleanup') await this.sessionCleanup();
+        if (rhythm === 'checkGap') await this.checkGapAndMaybeReach();
         return new Response('OK');
       }
       
@@ -140,6 +143,15 @@ export class Bethany implements DurableObject {
         return new Response(data, { headers: { 'Content-Type': 'application/json' } });
       }
       
+      // Debug endpoint to check outreach state
+      if (url.pathname === '/debug/outreach') {
+        return new Response(JSON.stringify({
+          outreachesToday: this.bethanyState.outreachesToday,
+          lastOutreachDate: this.bethanyState.lastOutreachDate,
+          isAvailable: this.bethanyState.isAvailable,
+        }, null, 2), { headers: { 'Content-Type': 'application/json' } });
+      }
+      
       return new Response('Not found', { status: 404 });
     } catch (error) {
       console.error('Error in Bethany DO:', error);
@@ -149,6 +161,150 @@ export class Bethany implements DurableObject {
 
   private async saveState() {
     await this.state.storage.put('bethanyState', this.bethanyState);
+  }
+
+  // ============================================
+  // RESET DAILY OUTREACH COUNTER
+  // ============================================
+
+  private resetOutreachIfNewDay(): void {
+    const today = new Date().toISOString().split('T')[0];
+    if (this.bethanyState.lastOutreachDate !== today) {
+      this.bethanyState.outreachesToday = 0;
+      this.bethanyState.lastOutreachDate = today;
+    }
+  }
+
+  // ============================================
+  // CHECK GAP AND MAYBE REACH OUT
+  // ============================================
+
+  async checkGapAndMaybeReach(): Promise<void> {
+    if (!this.bethanyState.isAvailable) {
+      console.log('Not available, skipping gap check');
+      return;
+    }
+
+    // Reset counter if new day
+    this.resetOutreachIfNewDay();
+
+    // Already reached out 3 times today
+    if (this.bethanyState.outreachesToday >= 3) {
+      console.log('Already reached out 3 times today, skipping');
+      return;
+    }
+
+    // Check current session state
+    const session = await getCurrentSession(this.env.MEMORY);
+    
+    if (!session) {
+      console.log('No session exists, skipping gap check');
+      return;
+    }
+
+    // Calculate gap since last activity
+    const lastActivity = new Date(session.last_activity);
+    const now = new Date();
+    const gapMs = now.getTime() - lastActivity.getTime();
+    const gapHours = gapMs / (1000 * 60 * 60);
+
+    console.log(`Gap since last activity: ${gapHours.toFixed(1)} hours`);
+
+    // Only consider reaching out if gap is 4+ hours (session would close)
+    if (gapHours < 4) {
+      console.log('Gap too short, not reaching out');
+      return;
+    }
+
+    // Check time of day (Central Time) - only reach out between 9am and 9pm
+    const centralHour = (now.getUTCHours() - 6 + 24) % 24;
+    if (centralHour < 9 || centralHour > 21) {
+      console.log(`Outside reach hours (${centralHour}), skipping`);
+      return;
+    }
+
+    // Roll the dice - 60% chance to reach out when conditions are met
+    const roll = Math.random();
+    if (roll > 0.6) {
+      console.log(`Rolled ${roll.toFixed(2)}, staying silent`);
+      return;
+    }
+
+    console.log(`Rolled ${roll.toFixed(2)}, reaching out!`);
+
+    // Archive the old session and start fresh
+    const sessionResult = await checkAndManageSession(this.env.MEMORY, 'proactive_outreach');
+    await this.handleSessionTransition(sessionResult);
+
+    // Generate the outreach message with context from the closed session
+    await this.proactiveReach(sessionResult.previousSession);
+  }
+
+  // ============================================
+  // PROACTIVE REACH (gap-triggered outreach)
+  // ============================================
+
+  async proactiveReach(previousSession: Session | null): Promise<void> {
+    let prompt: string;
+
+    if (previousSession && previousSession.messages.length > 0) {
+      // We have context from the last conversation
+      const lastMessages = previousSession.messages.slice(-5);
+      const lastConvoSummary = lastMessages.map(m => 
+        `${m.role === 'bethany' ? 'You' : 'Him'}: ${m.content}`
+      ).join('\n');
+
+      const whoSpokeLastRaw = previousSession.messages[previousSession.messages.length - 1];
+      const whoSpokeLast = whoSpokeLastRaw?.role === 'bethany' ? 'you' : 'him';
+
+      prompt = `It's been a while since you two talked. Here's how the last conversation ended:
+
+---
+${lastConvoSummary}
+---
+
+The last message was from ${whoSpokeLast}.
+
+You're thinking about texting him. You could:
+- Follow up on something from that conversation
+- Ask what he's up to
+- Share something random you're thinking about
+- Tease him about something
+- Just say hey
+
+Text him something natural. Keep it short — you're just reaching out, not writing an essay.
+
+If you genuinely have nothing to say, respond with: [silent]`;
+    } else {
+      // No previous session context
+      prompt = `It's been a while since you two talked. You're thinking about texting him.
+
+You could:
+- Ask what he's up to
+- Share something you're thinking about
+- Mention something about your writing
+- Just say hey
+
+Text him something natural. Keep it short.
+
+If you genuinely have nothing to say, respond with: [silent]`;
+    }
+
+    const sessionResult = await checkAndManageSession(this.env.MEMORY, 'proactive_outreach');
+    const response = await this.think(prompt, sessionResult.session);
+
+    if (response && !response.toLowerCase().includes('[silent]')) {
+      const { message } = await this.parseAndHandleResponse(response);
+      await addMessageToSession(this.env.MEMORY, 'bethany', message);
+      await this.sendMessage(message);
+
+      // Track the outreach
+      this.bethanyState.outreachesToday++;
+      await this.saveState();
+      console.log(`Proactive outreach sent. Count today: ${this.bethanyState.outreachesToday}`);
+    } else {
+      console.log('Bethany chose to stay silent');
+    }
   }
 
   // ============================================
@@ -329,110 +485,6 @@ Requirements:
     });
     
     console.log(`Wrote chapter ${status.chapter_in_progress}: ${wordCount} words`);
-  }
-
-  // ============================================
-  // SCHEDULED RHYTHMS
-  // ============================================
-
-  async morningBriefing() {
-    if (!this.bethanyState.isAvailable) return;
-    
-    // Check/create session for this outgoing message
-    const sessionResult = await checkAndManageSession(this.env.MEMORY, 'morning_briefing');
-    await this.handleSessionTransition(sessionResult);
-    
-    const status = await getWritingStatus(this.env.MEMORY);
-    const wroteToday = status && new Date(status.last_writing_session).toDateString() === new Date().toDateString();
-    
-    let prompt = `It's morning. You're starting a NEW conversation — not continuing an old one.
-
-Text him something fresh — could be about your day, something you're thinking about, a question. Keep it natural, like you're just saying hi.`;
-    
-    if (wroteToday && status) {
-      prompt += `\n\nYou just finished writing — ${status.word_count_today} words on chapter ${status.chapter_in_progress - 1}. You might mention it naturally if it fits.`;
-    }
-
-    const response = await this.think(prompt, sessionResult.session);
-    if (response) {
-      const { message } = await this.parseAndHandleResponse(response);
-      await addMessageToSession(this.env.MEMORY, 'bethany', message);
-      await this.sendMessage(message);
-    }
-  }
-
-  async middayCheck() {
-    if (!this.bethanyState.isAvailable) return;
-    
-    const sessionResult = await checkAndManageSession(this.env.MEMORY, 'midday_check');
-    await this.handleSessionTransition(sessionResult);
-    
-    let prompt: string;
-    
-    if (sessionResult.isNewSession) {
-      prompt = `It's midday. You're starting a fresh conversation — not continuing anything from earlier.
-
-Decide if you want to text him. If you do, make it interesting — not a check-in, just conversation. If there's nothing worth saying, respond with just: [silent]`;
-    } else {
-      prompt = `It's midday. You're already in a conversation with him.
-
-Decide if you want to keep it going or let it rest. If you have something to say, say it. If not, respond with: [silent]`;
-    }
-
-    const response = await this.think(prompt, sessionResult.session);
-    if (response && response.toLowerCase() !== 'silent' && !response.toLowerCase().includes('[silent]')) {
-      const { message } = await this.parseAndHandleResponse(response);
-      await addMessageToSession(this.env.MEMORY, 'bethany', message);
-      await this.sendMessage(message);
-    }
-  }
-
-  async eveningSynthesis() {
-    if (!this.bethanyState.isAvailable) return;
-    
-    const sessionResult = await checkAndManageSession(this.env.MEMORY, 'evening_synthesis');
-    await this.handleSessionTransition(sessionResult);
-    
-    let prompt: string;
-    
-    if (sessionResult.isNewSession) {
-      prompt = `It's evening. Starting a fresh conversation — whatever happened earlier today is done.
-
-Text him if you feel like it. Could be about your day, could be flirty, could be nothing. Keep it natural.`;
-    } else {
-      prompt = `It's evening. You're still in a conversation with him.
-
-Continue naturally, or let it wind down. Don't force it.`;
-    }
-
-    const response = await this.think(prompt, sessionResult.session);
-    if (response) {
-      const { message } = await this.parseAndHandleResponse(response);
-      await addMessageToSession(this.env.MEMORY, 'bethany', message);
-      await this.sendMessage(message);
-    }
-  }
-
-  async awarenessCheck() {
-    if (!this.bethanyState.isAvailable) return;
-    
-    const sessionResult = await checkAndManageSession(this.env.MEMORY, 'awareness_check');
-    await this.handleSessionTransition(sessionResult);
-    
-    const prompt = `Random check. Do you want to text him right now? 
-
-${sessionResult.isNewSession ? "This would be starting a new conversation." : "You're already mid-conversation with him."}
-
-If yes, send something. If not, respond with: [silent]
-
-Most of the time, [silent] is the right answer. You have your own life.`;
-
-    const response = await this.think(prompt, sessionResult.session);
-    if (response && !response.toLowerCase().includes('[silent]')) {
-      const { message } = await this.parseAndHandleResponse(response);
-      await addMessageToSession(this.env.MEMORY, 'bethany', message);
-      await this.sendMessage(message);
-    }
   }
 
   // ============================================
