@@ -48,9 +48,11 @@ export class Bethany implements DurableObject {
     try {
       // Initialize memory if needed
       if (!this.bethanyState.memoryInitialized) {
+        console.log('Initializing memory...');
         await initializeMemory(this.env.MEMORY);
         this.bethanyState.memoryInitialized = true;
         await this.saveState();
+        console.log('Memory initialized');
       }
       
       if (url.pathname === '/sms' && request.method === 'POST') {
@@ -68,6 +70,14 @@ export class Bethany implements DurableObject {
         if (rhythm === 'eveningSynthesis') await this.eveningSynthesis();
         if (rhythm === 'awarenessCheck') await this.awarenessCheck();
         return new Response('OK');
+      }
+      
+      // Debug endpoint to check memory
+      if (url.pathname === '/debug/memory') {
+        const hotMemory = await loadHotMemory(this.env.MEMORY);
+        const people = await loadPeople(this.env.MEMORY);
+        const formatted = hotMemory ? formatMemoryForContext(hotMemory, people) : 'No memory loaded';
+        return new Response(formatted, { headers: { 'Content-Type': 'text/plain' } });
       }
       
       return new Response('Not found', { status: 404 });
@@ -170,13 +180,21 @@ Most of the time, [silent] is the right answer. You have your own life.`;
 
   async think(input: string): Promise<string | null> {
     // Load memory from R2
+    console.log('Loading memory from R2...');
     const hotMemory = await loadHotMemory(this.env.MEMORY);
     const people = await loadPeople(this.env.MEMORY);
+    
+    console.log('Hot memory loaded:', hotMemory ? 'yes' : 'no');
+    console.log('People loaded:', people.length);
     
     // Format memory for context
     let memoryContext = '';
     if (hotMemory) {
       memoryContext = formatMemoryForContext(hotMemory, people);
+      console.log('Memory context length:', memoryContext.length);
+      console.log('Memory context preview:', memoryContext.substring(0, 200));
+    } else {
+      console.log('No hot memory available');
     }
     
     // Get recent conversation from D1
@@ -189,6 +207,8 @@ Most of the time, [silent] is the right answer. You have your own life.`;
 
     // Build full system prompt with memory
     const fullSystemPrompt = BETHANY_SYSTEM_PROMPT + '\n\n' + memoryContext + '\n\n' + contextualPrompt;
+    
+    console.log('Full system prompt length:', fullSystemPrompt.length);
 
     const messages: any[] = [{ role: 'user', content: input }];
     
