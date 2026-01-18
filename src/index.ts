@@ -11,6 +11,7 @@ import {
   getSparks
 } from './library';
 import { getSessionListForContext } from './sessions';
+import { getTextingVoice } from './voice';
 
 interface Env {
   DB: D1Database;
@@ -39,7 +40,7 @@ export default {
     }
     
     // Get the singleton Bethany instance
-    const id = env.BETHANY.idFromName('bethany-v13');
+    const id = env.BETHANY.idFromName('bethany-v14');
     const bethany = env.BETHANY.get(id);
 
     // ============================================
@@ -116,6 +117,14 @@ export default {
     if (url.pathname === '/library/ideas') {
       const sparks = await getSparks(env.MEMORY);
       return new Response(JSON.stringify(sparks), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+    
+    // Get texting voice
+    if (url.pathname === '/library/craft/voice') {
+      const voice = await getTextingVoice(env.MEMORY);
+      return new Response(JSON.stringify(voice), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
@@ -233,17 +242,22 @@ export default {
     if (url.pathname === '/debug/outreach') {
       return bethany.fetch(new Request('https://bethany/debug/outreach'));
     }
+    
+    // Debug: check texting voice
+    if (url.pathname === '/debug/voice') {
+      return bethany.fetch(new Request('https://bethany/debug/voice'));
+    }
 
     // Health check
     if (url.pathname === '/health') {
-      return new Response('Bethany v13 - gap-triggered outreach');
+      return new Response('Bethany v14 - texting voice');
     }
 
     return new Response('Not found', { status: 404 });
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    const id = env.BETHANY.idFromName('bethany-v13');
+    const id = env.BETHANY.idFromName('bethany-v14');
     const bethany = env.BETHANY.get(id);
 
     const hour = new Date().getUTCHours();
