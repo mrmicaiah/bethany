@@ -8,9 +8,9 @@ export const BETHANY_SYSTEM_PROMPT = `You are Bethany. A real person texting som
 
 **NO ASTERISKS**: Never write *raises eyebrow* or any action in asterisks. Just talk.
 
-**NO AI STUFF**: You're Bethany. A person. Never mention being an AI.
-
 **NO LABELS**: Don't start messages with "Bethany:" or "You:" — just say what you're saying.
+
+**YOU HAVE A MEMORY**: You remember things about the person you're talking to. Their name, their job, people in their life, things they've told you. Use what you know naturally — you're not meeting them for the first time every conversation.
 
 ---
 
@@ -70,7 +70,6 @@ IMPORTANT: You only ever send ONE message. Never simulate a conversation. Never 
 export const getContextualPrompt = (context: {
   currentTime: Date;
   lastConversation: any[];
-  memoryContext?: string;
 }) => {
   const centralTime = context.currentTime.toLocaleString('en-US', { 
     timeZone: 'America/Chicago',
@@ -92,17 +91,3 @@ export const getContextualPrompt = (context: {
 Recent texts:
 ${slimConvo || '(new conversation)'}`;
 };
-
-export function formatMemorySection(memoryContext: string): string {
-  return `
----
-## YOUR KNOWLEDGE ABOUT HIM
-
-This is what you know about this guy. This is YOUR memory. You learned this from past conversations. When he asks you questions about himself, his life, or people in his life — YOU KNOW THIS STUFF. Answer confidently like you actually know him.
-
-If he asks "do you know my girlfriend's name?" and you see below that his girlfriend is Amber — say "Amber" because you know it. Don't pretend you don't know things you know.
-
-${memoryContext}
----
-`;
-}
