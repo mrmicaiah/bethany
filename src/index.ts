@@ -10,6 +10,7 @@ import {
   getRomanceBeats,
   getSparks
 } from './library';
+import { getSessionListForContext } from './sessions';
 
 interface Env {
   DB: D1Database;
@@ -38,7 +39,7 @@ export default {
     }
     
     // Get the singleton Bethany instance
-    const id = env.BETHANY.idFromName('bethany-v12');
+    const id = env.BETHANY.idFromName('bethany-v13');
     const bethany = env.BETHANY.get(id);
 
     // ============================================
@@ -190,25 +191,22 @@ export default {
     // TRIGGERS & DEBUG
     // ============================================
 
-    if (url.pathname === '/trigger/morning') {
-      ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/morningBriefing')));
-      return new Response('Morning briefing triggered');
-    }
-    if (url.pathname === '/trigger/midday') {
-      ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/middayCheck')));
-      return new Response('Midday check triggered');
-    }
-    if (url.pathname === '/trigger/evening') {
-      ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/eveningSynthesis')));
-      return new Response('Evening synthesis triggered');
-    }
+    // Manual trigger to check gap and maybe reach out
     if (url.pathname === '/trigger/check') {
-      ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/awarenessCheck')));
-      return new Response('Awareness check triggered');
+      ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/checkGap')));
+      return new Response('Gap check triggered');
     }
+    
+    // Manual trigger for writing session
     if (url.pathname === '/trigger/write') {
       ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/writingSession')));
       return new Response('Writing session triggered - check /library/status in a minute');
+    }
+    
+    // Manual trigger for session cleanup
+    if (url.pathname === '/trigger/cleanup') {
+      ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/sessionCleanup')));
+      return new Response('Session cleanup triggered');
     }
 
     // Debug: check memory
@@ -221,38 +219,50 @@ export default {
       return bethany.fetch(new Request('https://bethany/debug/session'));
     }
     
+    // Debug: check session archive
+    if (url.pathname === '/debug/sessions') {
+      return bethany.fetch(new Request('https://bethany/debug/sessions'));
+    }
+    
     // Debug: check notes
     if (url.pathname === '/debug/notes') {
       return bethany.fetch(new Request('https://bethany/debug/notes'));
     }
+    
+    // Debug: check outreach state
+    if (url.pathname === '/debug/outreach') {
+      return bethany.fetch(new Request('https://bethany/debug/outreach'));
+    }
 
     // Health check
     if (url.pathname === '/health') {
-      return new Response('Bethany v12 - session memory');
+      return new Response('Bethany v13 - gap-triggered outreach');
     }
 
     return new Response('Not found', { status: 404 });
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    const id = env.BETHANY.idFromName('bethany-v12');
+    const id = env.BETHANY.idFromName('bethany-v13');
     const bethany = env.BETHANY.get(id);
 
     const hour = new Date().getUTCHours();
     const centralHour = (hour - 6 + 24) % 24; // Central time
 
-    // Morning writing session (9am Central)
-    if (centralHour === 9) {
+    // Morning writing session (5am Central - her sacred writing time)
+    if (centralHour === 5) {
       ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/writingSession')));
     }
     
-    // Regular rhythms
-    if (centralHour === 10) {
-      ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/morningBriefing')));
-    } else if (centralHour === 14) {
-      ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/middayCheck')));
-    } else if (centralHour === 20) {
-      ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/eveningSynthesis')));
+    // Check gap every hour between 9am and 9pm Central
+    // This is when she might reach out if there's been a 4+ hour gap
+    if (centralHour >= 9 && centralHour <= 21) {
+      ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/checkGap')));
+    }
+    
+    // Session cleanup once a day at 3am Central
+    if (centralHour === 3) {
+      ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/sessionCleanup')));
     }
   }
 };
