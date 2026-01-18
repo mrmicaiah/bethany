@@ -1,4 +1,4 @@
-import { BETHANY_SYSTEM_PROMPT, getContextualPrompt, formatMemorySection } from './personality';
+import { BETHANY_SYSTEM_PROMPT, getContextualPrompt } from './personality';
 import { loadHotMemory, loadPeople, formatMemoryForContext, initializeMemory } from './memory';
 
 interface Env {
@@ -180,19 +180,13 @@ Most of the time, [silent] is the right answer. You have your own life.`;
 
   async think(input: string): Promise<string | null> {
     // Load memory from R2
-    console.log('Loading memory from R2...');
     const hotMemory = await loadHotMemory(this.env.MEMORY);
     const people = await loadPeople(this.env.MEMORY);
     
-    console.log('Hot memory loaded:', hotMemory ? 'yes' : 'no');
-    console.log('People loaded:', people.length);
-    
     // Format memory for context
-    let memorySection = '';
+    let memoryContext = '';
     if (hotMemory) {
-      const memoryContext = formatMemoryForContext(hotMemory, people);
-      memorySection = formatMemorySection(memoryContext);
-      console.log('Memory section length:', memorySection.length);
+      memoryContext = formatMemoryForContext(hotMemory, people);
     }
     
     // Get recent conversation from D1
@@ -204,9 +198,7 @@ Most of the time, [silent] is the right answer. You have your own life.`;
     });
 
     // Build full system prompt: personality + memory + context
-    const fullSystemPrompt = BETHANY_SYSTEM_PROMPT + '\n\n' + memorySection + '\n\n' + contextualPrompt;
-    
-    console.log('Full system prompt length:', fullSystemPrompt.length);
+    const fullSystemPrompt = BETHANY_SYSTEM_PROMPT + '\n\n' + memoryContext + '\n\n' + contextualPrompt;
 
     const messages: any[] = [{ role: 'user', content: input }];
     
