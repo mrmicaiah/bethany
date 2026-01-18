@@ -1,5 +1,5 @@
 import { BETHANY_SYSTEM_PROMPT, getContextualPrompt } from './personality';
-import { loadHotMemory, loadPeople, formatMemoryForContext, initializeMemory, addSelfNote } from './memory';
+import { loadHotMemory, loadPeople, formatMemoryForContext, initializeMemory, addSelfNote, addConversationSummary } from './memory';
 import { 
   initializeLibrary, 
   getWritingStatus, 
@@ -14,6 +14,15 @@ import {
   addSpark,
   getRandomExcerpt
 } from './library';
+import {
+  checkAndManageSession,
+  addMessageToSession,
+  formatSessionForContext,
+  summarizeSessionForMemory,
+  getCurrentSession,
+  getRecentSessionsSummary,
+  SessionCheckResult
+} from './sessions';
 
 interface Env {
   DB: D1Database;
@@ -104,6 +113,14 @@ export class Bethany implements DurableObject {
         return new Response(formatted, { headers: { 'Content-Type': 'text/plain' } });
       }
       
+      // Debug endpoint to check current session
+      if (url.pathname === '/debug/session') {
+        const session = await getCurrentSession(this.env.MEMORY);
+        return new Response(JSON.stringify(session, null, 2), { 
+          headers: { 'Content-Type': 'application/json' } 
+        });
+      }
+      
       // Debug endpoint to check self notes
       if (url.pathname === '/debug/notes') {
         const obj = await this.env.MEMORY.get('micaiah/self.json');
@@ -121,6 +138,28 @@ export class Bethany implements DurableObject {
 
   private async saveState() {
     await this.state.storage.put('bethanyState', this.bethanyState);
+  }
+
+  // ============================================
+  // HANDLE SESSION TRANSITIONS
+  // ============================================
+
+  private async handleSessionTransition(sessionResult: SessionCheckResult): Promise<void> {
+    if (sessionResult.isNewSession && sessionResult.previousSession) {
+      // Summarize and store the previous session in long-term memory
+      const summary = summarizeSessionForMemory(sessionResult.previousSession);
+      if (summary) {
+        const date = new Date(sessionResult.previousSession.started_at).toISOString().split('T')[0];
+        await addConversationSummary(this.env.MEMORY, {
+          date,
+          summary,
+          topics: [], // Could extract from messages
+          vibe: 'casual', // Could analyze
+          memorable_moment: null,
+        });
+        console.log('Stored session summary:', summary);
+      }
+    }
   }
 
   // ============================================
@@ -151,13 +190,12 @@ export class Bethany implements DurableObject {
     if (status.chapter_in_progress > 1) {
       const prev = await getChapter(this.env.MEMORY, status.current_project, status.chapter_in_progress - 1);
       if (prev) {
-        // Just the last few paragraphs for context
         const paragraphs = prev.split('\n\n');
         previousChapter = paragraphs.slice(-3).join('\n\n');
       }
     }
     
-    // Build the writing prompt with the detailed style guide
+    // Build the writing prompt
     const writingPrompt = `You are writing Chapter ${status.chapter_in_progress} of "${book.title}".
 
 ## THE BOOK
@@ -251,12 +289,10 @@ Requirements:
       return;
     }
     
-    // Save the chapter
     await saveChapter(this.env.MEMORY, status.current_project, status.chapter_in_progress, chapter, {
       status: 'draft',
     });
     
-    // Update writing status
     const wordCount = chapter.split(/\s+/).length;
     const today = new Date().toDateString();
     const lastSession = new Date(status.last_writing_session).toDateString();
@@ -279,20 +315,25 @@ Requirements:
   async morningBriefing() {
     if (!this.bethanyState.isAvailable) return;
     
+    // Check/create session for this outgoing message
+    const sessionResult = await checkAndManageSession(this.env.MEMORY, 'morning_briefing');
+    await this.handleSessionTransition(sessionResult);
+    
     const status = await getWritingStatus(this.env.MEMORY);
     const wroteToday = status && new Date(status.last_writing_session).toDateString() === new Date().toDateString();
     
-    let prompt = `It's morning. Text him something — could be about your day, something you're thinking about, a question.`;
+    let prompt = `It's morning. You're starting a NEW conversation — not continuing an old one.
+
+Text him something fresh — could be about your day, something you're thinking about, a question. Keep it natural, like you're just saying hi.`;
     
     if (wroteToday && status) {
-      prompt += ` You just finished writing — ${status.word_count_today} words on chapter ${status.chapter_in_progress - 1}. You might mention it naturally if it fits.`;
+      prompt += `\n\nYou just finished writing — ${status.word_count_today} words on chapter ${status.chapter_in_progress - 1}. You might mention it naturally if it fits.`;
     }
-    
-    prompt += ` Keep it natural. You're not briefing him, you're just saying hi.`;
 
-    const response = await this.think(prompt);
+    const response = await this.think(prompt, sessionResult.session);
     if (response) {
       const { message } = this.parseResponse(response);
+      await addMessageToSession(this.env.MEMORY, 'bethany', message);
       await this.sendMessage(message);
     }
   }
@@ -300,11 +341,25 @@ Requirements:
   async middayCheck() {
     if (!this.bethanyState.isAvailable) return;
     
-    const prompt = `It's midday. Decide if you want to text him. If you do, make it interesting — not a check-in, just conversation. If there's nothing worth saying, respond with just: [silent]`;
+    const sessionResult = await checkAndManageSession(this.env.MEMORY, 'midday_check');
+    await this.handleSessionTransition(sessionResult);
+    
+    let prompt: string;
+    
+    if (sessionResult.isNewSession) {
+      prompt = `It's midday. You're starting a fresh conversation — not continuing anything from earlier.
 
-    const response = await this.think(prompt);
-    if (response && response.toLowerCase() !== 'silent' && response.toLowerCase() !== '[silent]') {
+Decide if you want to text him. If you do, make it interesting — not a check-in, just conversation. If there's nothing worth saying, respond with just: [silent]`;
+    } else {
+      prompt = `It's midday. You're already in a conversation with him.
+
+Decide if you want to keep it going or let it rest. If you have something to say, say it. If not, respond with: [silent]`;
+    }
+
+    const response = await this.think(prompt, sessionResult.session);
+    if (response && response.toLowerCase() !== 'silent' && !response.toLowerCase().includes('[silent]')) {
       const { message } = this.parseResponse(response);
+      await addMessageToSession(this.env.MEMORY, 'bethany', message);
       await this.sendMessage(message);
     }
   }
@@ -312,11 +367,25 @@ Requirements:
   async eveningSynthesis() {
     if (!this.bethanyState.isAvailable) return;
     
-    const prompt = `It's evening. Text him if you feel like it. Could be about your day, could be flirty, could be about your writing, could be nothing. Keep it natural.`;
+    const sessionResult = await checkAndManageSession(this.env.MEMORY, 'evening_synthesis');
+    await this.handleSessionTransition(sessionResult);
+    
+    let prompt: string;
+    
+    if (sessionResult.isNewSession) {
+      prompt = `It's evening. Starting a fresh conversation — whatever happened earlier today is done.
 
-    const response = await this.think(prompt);
+Text him if you feel like it. Could be about your day, could be flirty, could be nothing. Keep it natural.`;
+    } else {
+      prompt = `It's evening. You're still in a conversation with him.
+
+Continue naturally, or let it wind down. Don't force it.`;
+    }
+
+    const response = await this.think(prompt, sessionResult.session);
     if (response) {
       const { message } = this.parseResponse(response);
+      await addMessageToSession(this.env.MEMORY, 'bethany', message);
       await this.sendMessage(message);
     }
   }
@@ -324,13 +393,21 @@ Requirements:
   async awarenessCheck() {
     if (!this.bethanyState.isAvailable) return;
     
-    const prompt = `Random check. Do you want to text him right now? If yes, send something. If not, respond with: [silent]
+    const sessionResult = await checkAndManageSession(this.env.MEMORY, 'awareness_check');
+    await this.handleSessionTransition(sessionResult);
+    
+    const prompt = `Random check. Do you want to text him right now? 
+
+${sessionResult.isNewSession ? "This would be starting a new conversation." : "You're already mid-conversation with him."}
+
+If yes, send something. If not, respond with: [silent]
 
 Most of the time, [silent] is the right answer. You have your own life.`;
 
-    const response = await this.think(prompt);
+    const response = await this.think(prompt, sessionResult.session);
     if (response && !response.toLowerCase().includes('[silent]')) {
       const { message } = this.parseResponse(response);
+      await addMessageToSession(this.env.MEMORY, 'bethany', message);
       await this.sendMessage(message);
     }
   }
@@ -342,7 +419,12 @@ Most of the time, [silent] is the right answer. You have your own life.`;
   async onMessage(message: string) {
     console.log('onMessage called with:', message);
     
-    await this.logConversation('micaiah', message);
+    // Check/manage session FIRST
+    const sessionResult = await checkAndManageSession(this.env.MEMORY, 'incoming_message');
+    await this.handleSessionTransition(sessionResult);
+    
+    // Add his message to session
+    await addMessageToSession(this.env.MEMORY, 'micaiah', message);
     
     const lowerMessage = message.toLowerCase();
     
@@ -354,7 +436,7 @@ Most of the time, [silent] is the right answer. You have your own life.`;
       this.bethanyState.isAvailable = false;
       await this.saveState();
       const response = "k";
-      await this.logConversation('bethany', response);
+      await addMessageToSession(this.env.MEMORY, 'bethany', response);
       await this.sendMessage(response);
       return;
     }
@@ -373,7 +455,7 @@ Most of the time, [silent] is the right answer. You have your own life.`;
       const excerpt = await getRandomExcerpt(this.env.MEMORY, 400);
       if (excerpt) {
         const response = `from ${excerpt.source}:\n\n"${excerpt.excerpt}"`;
-        await this.logConversation('bethany', response);
+        await addMessageToSession(this.env.MEMORY, 'bethany', response);
         await this.sendMessage(response);
         return;
       }
@@ -383,7 +465,6 @@ Most of the time, [silent] is the right answer. You have your own life.`;
     if (lowerMessage.includes('that would make a good') ||
         lowerMessage.includes('you should write about') ||
         lowerMessage.includes('story idea')) {
-      // Save as a spark
       await addSpark(this.env.MEMORY, {
         spark: message,
         source: 'conversation',
@@ -391,16 +472,14 @@ Most of the time, [silent] is the right answer. You have your own life.`;
       });
     }
 
-    const response = await this.think(message);
+    const response = await this.think(message, sessionResult.session);
     
     if (response) {
       const { message: textMessage, note } = this.parseResponse(response);
       
-      // Save note if she added one
       if (note) {
         console.log('Bethany noted:', note);
         
-        // Check if it's a story idea
         if (note.toLowerCase().includes('story') || note.toLowerCase().includes('book') || note.toLowerCase().includes('scene')) {
           await addSpark(this.env.MEMORY, {
             spark: note,
@@ -412,7 +491,7 @@ Most of the time, [silent] is the right answer. You have your own life.`;
         }
       }
       
-      await this.logConversation('bethany', textMessage);
+      await addMessageToSession(this.env.MEMORY, 'bethany', textMessage);
       await this.sendMessage(textMessage);
     }
   }
@@ -422,7 +501,6 @@ Most of the time, [silent] is the right answer. You have your own life.`;
   // ============================================
 
   parseResponse(response: string): { message: string; note: string | null } {
-    // Look for [note: ...] at the end
     const noteMatch = response.match(/\[note:\s*(.+?)\]\s*$/i);
     
     if (noteMatch) {
@@ -435,15 +513,14 @@ Most of the time, [silent] is the right answer. You have your own life.`;
   }
 
   // ============================================
-  // THINKING (Claude API with Memory)
+  // THINKING (Claude API with Session Memory)
   // ============================================
 
-  async think(input: string): Promise<string | null> {
-    // Load memory from R2
+  async think(input: string, session: { messages: any[] }): Promise<string | null> {
+    // Load long-term memory from R2
     const hotMemory = await loadHotMemory(this.env.MEMORY);
     const people = await loadPeople(this.env.MEMORY);
     
-    // Format memory for context
     let memoryContext = '';
     if (hotMemory) {
       memoryContext = formatMemoryForContext(hotMemory, people);
@@ -459,16 +536,22 @@ Most of the time, [silent] is the right answer. You have your own life.`;
       }
     }
     
-    // Get recent conversation from D1
-    const recentConversation = await this.getRecentConversation(20);
+    // Format SESSION context (not old D1 history)
+    const sessionContext = formatSessionForContext(session as any);
+    
+    // Get recent session summaries for light context
+    const recentSessions = await getRecentSessionsSummary(this.env.MEMORY);
+    const recentContext = recentSessions.length > 0 
+      ? `\n\n## Recent conversations (for context, not continuation):\n${recentSessions.join('\n')}`
+      : '';
     
     const contextualPrompt = getContextualPrompt({
       currentTime: new Date(),
-      lastConversation: recentConversation
+      lastConversation: [], // Not using D1 history anymore
     });
 
     // Build full system prompt
-    const fullSystemPrompt = BETHANY_SYSTEM_PROMPT + '\n\n' + memoryContext + writingContext + '\n\n' + contextualPrompt;
+    const fullSystemPrompt = BETHANY_SYSTEM_PROMPT + '\n\n' + memoryContext + writingContext + recentContext + '\n\n' + contextualPrompt + `\n\n## This conversation:\n${sessionContext}`;
 
     const messages: any[] = [{ role: 'user', content: input }];
     
@@ -503,53 +586,6 @@ Most of the time, [silent] is the right answer. You have your own life.`;
     
     const textBlock = data.content?.find((block: any) => block.type === 'text');
     return textBlock ? textBlock.text : "...";
-  }
-
-  // ============================================
-  // CONVERSATION HISTORY
-  // ============================================
-
-  async logConversation(role: string, content: string) {
-    const id = crypto.randomUUID();
-    await this.env.DB.prepare(`
-      INSERT INTO bethany_conversations (id, role, content, created_at)
-      VALUES (?, ?, ?, datetime('now'))
-    `).bind(id, role, content).run();
-  }
-
-  async getRecentConversation(limit: number = 20) {
-    const lastMessage = await this.env.DB.prepare(`
-      SELECT created_at FROM bethany_conversations 
-      ORDER BY created_at DESC LIMIT 1
-    `).first() as { created_at: string } | null;
-    
-    if (!lastMessage) {
-      return [];
-    }
-    
-    const now = new Date();
-    const centralHour = parseInt(now.toLocaleString('en-US', { 
-      timeZone: 'America/Chicago', 
-      hour: 'numeric', 
-      hour12: false 
-    }));
-    
-    const lastMessageTime = new Date(lastMessage.created_at + 'Z');
-    const hoursSinceLastMessage = (now.getTime() - lastMessageTime.getTime()) / (1000 * 60 * 60);
-    
-    // After midnight (0-6am) with 3+ hour gap = fresh start
-    if (centralHour >= 0 && centralHour < 6 && hoursSinceLastMessage >= 3) {
-      return [];
-    }
-    
-    const result = await this.env.DB.prepare(`
-      SELECT role, content, created_at 
-      FROM bethany_conversations 
-      ORDER BY created_at DESC 
-      LIMIT ?
-    `).bind(limit).all();
-    
-    return result.results.reverse();
   }
 
   // ============================================
