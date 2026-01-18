@@ -38,7 +38,7 @@ export default {
     }
     
     // Get the singleton Bethany instance
-    const id = env.BETHANY.idFromName('bethany-v11');
+    const id = env.BETHANY.idFromName('bethany-v12');
     const bethany = env.BETHANY.get(id);
 
     // ============================================
@@ -207,7 +207,6 @@ export default {
       return new Response('Awareness check triggered');
     }
     if (url.pathname === '/trigger/write') {
-      // Writing session runs in background - takes too long to await
       ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/writingSession')));
       return new Response('Writing session triggered - check /library/status in a minute');
     }
@@ -217,6 +216,11 @@ export default {
       return bethany.fetch(new Request('https://bethany/debug/memory'));
     }
     
+    // Debug: check current session
+    if (url.pathname === '/debug/session') {
+      return bethany.fetch(new Request('https://bethany/debug/session'));
+    }
+    
     // Debug: check notes
     if (url.pathname === '/debug/notes') {
       return bethany.fetch(new Request('https://bethany/debug/notes'));
@@ -224,20 +228,20 @@ export default {
 
     // Health check
     if (url.pathname === '/health') {
-      return new Response('Bethany v11 - novelist with library');
+      return new Response('Bethany v12 - session memory');
     }
 
     return new Response('Not found', { status: 404 });
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    const id = env.BETHANY.idFromName('bethany-v11');
+    const id = env.BETHANY.idFromName('bethany-v12');
     const bethany = env.BETHANY.get(id);
 
     const hour = new Date().getUTCHours();
     const centralHour = (hour - 6 + 24) % 24; // Central time
 
-    // Morning writing session (9am Central = after her 5-9am writing time)
+    // Morning writing session (9am Central)
     if (centralHour === 9) {
       ctx.waitUntil(bethany.fetch(new Request('https://bethany/rhythm/writingSession')));
     }
