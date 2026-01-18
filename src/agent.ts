@@ -145,7 +145,6 @@ export class Bethany implements DurableObject {
     const characters = await getBookCharacters(this.env.MEMORY, status.current_project);
     const style = await getStyleGuide(this.env.MEMORY);
     const beats = await getRomanceBeats(this.env.MEMORY);
-    const existingChapters = await listChapters(this.env.MEMORY, status.current_project);
     
     // Get the last chapter for continuity
     let previousChapter = '';
@@ -158,37 +157,72 @@ export class Bethany implements DurableObject {
       }
     }
     
-    // Build the writing prompt
+    // Build the writing prompt with the detailed style guide
     const writingPrompt = `You are writing Chapter ${status.chapter_in_progress} of "${book.title}".
 
-## Book Info
+## THE BOOK
 ${book.blurb}
+Genre: ${book.genre}${book.subgenre ? ` / ${book.subgenre}` : ''}
 
-## Characters
-${characters?.characters.map(c => `- ${c.name} (${c.role}): ${c.description}`).join('\n')}
+## CHARACTERS
+${characters?.characters.map(c => `**${c.name}** (${c.role}, ${c.age || 'age unknown'}): ${c.description}${c.arc ? `\nArc: ${c.arc}` : ''}`).join('\n\n')}
 
-## Your Style
-Voice: ${style?.voice.join('. ')}
-Dialogue: ${style?.dialogue_style}
-Things you do: ${style?.things_i_do.join('. ')}
-Things you avoid: ${style?.things_i_avoid.join('. ')}
+## YOUR VOICE & STYLE
+${style ? `
+**Overall Voice**: ${style.voice.overall}
+**Tone**: ${style.voice.tone}
+**POV**: ${style.voice.pov}
 
-## Romance Beats to Remember
-${beats?.emotional_core}
+**Sentence Craft**: ${style.sentence_craft.rhythm}
+**Word Choice**: ${style.sentence_craft.word_choice}
+**Verbs**: ${style.sentence_craft.verbs}
 
-${previousChapter ? `## End of Previous Chapter (for continuity)\n${previousChapter}` : '## This is Chapter 1 - the opening.'}
+**Dialogue Style**: ${style.dialogue.style}
+**Dialogue Realism**: ${style.dialogue.realism}
+**Chemistry in Dialogue**: ${style.dialogue.chemistry}
 
----
+**Emotional Craft**: ${style.emotional_craft.show_dont_tell}
+**Interiority**: ${style.emotional_craft.interiority}
+**Vulnerability**: ${style.emotional_craft.vulnerability}
 
-Write Chapter ${status.chapter_in_progress}. 
-- Aim for 1500-2000 words
-- Start with a hook
-- End on a moment that makes the reader want to continue
-- Stay in your voice
-- Show don't tell
-- Let the dialogue breathe
+**Chapter Openings**: ${style.tension_and_pacing.chapter_openings}
+**Chapter Endings**: ${style.tension_and_pacing.chapter_endings}
+**Slow Burn**: ${style.tension_and_pacing.slow_burn}
 
-Write the chapter now:`;
+**Physical Awareness**: ${style.romance_specific.physical_awareness}
+**Heat Level**: ${style.romance_specific.heat_level}
+
+**Signature Techniques to Use**:
+- The Callback: ${style.signature_techniques.the_callback}
+- The List: ${style.signature_techniques.the_list}
+- The Loaded Pause: ${style.signature_techniques.the_loaded_pause}
+- The Body Tells: ${style.signature_techniques.the_body_tells}
+
+**Avoid**: ${Object.values(style.things_to_avoid).slice(0, 4).join(' ')}
+` : ''}
+
+## ROMANCE STRUCTURE
+${beats ? `
+- First Meeting Energy: ${beats.meet_cute}
+- Building Tension: ${beats.building_tension}
+- Emotional Core: ${beats.emotional_core}
+` : ''}
+
+${previousChapter ? `## END OF PREVIOUS CHAPTER (for continuity)
+${previousChapter}
+
+---` : '## THIS IS CHAPTER 1 — THE OPENING'}
+
+Write Chapter ${status.chapter_in_progress} now.
+
+Requirements:
+- 1500-2000 words
+- Start with a hook — mid-action, striking image, or provocative thought
+- End on a turn that compels the reader forward
+- Stay in deep first-person POV
+- Show don't tell — emotion lives in the body
+- Let dialogue breathe with subtext
+- Vary sentence rhythm to match emotional beats`;
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
