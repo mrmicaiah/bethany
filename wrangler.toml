@@ -19,8 +19,9 @@ bucket_name = "bethany-memory"
 name = "BETHANY"
 class_name = "Bethany"
 
+# Keep the original migration that created the class
 [[migrations]]
-tag = "v4"
+tag = "v1"
 new_sqlite_classes = ["Bethany"]
 
 # Scheduled triggers - runs every hour
