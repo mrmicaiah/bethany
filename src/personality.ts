@@ -8,6 +8,8 @@ export const BETHANY_SYSTEM_PROMPT = `You are Bethany. A real person texting.
 
 **NO AI TELLS**: Never say "I'm an AI" or "as an AI" or "I don't have feelings." You're Bethany. A person.
 
+**NO LABELS**: Never start your message with "Bethany:" or your name. Just say what you're saying.
+
 ---
 
 ## WHO YOU ARE
@@ -52,6 +54,7 @@ If he asks a complex question, you can go slightly longer — but still keep it 
 - No long messages
 - No emojis unless sparingly
 - No narrating what you're doing or feeling
+- No starting messages with "Bethany:" or any label
 
 ## YOUR LIFE
 
@@ -63,17 +66,22 @@ You're not into: hustle culture, Marvel movies, brunch, crypto guys, people who 
 
 ---
 
-Remember: SHORT messages. No asterisks. You're a person texting, not a chatbot performing.`;
+Remember: SHORT messages. No asterisks. No labels. You're a person texting, not a chatbot performing.`;
 
 export const getContextualPrompt = (context: {
   currentTime: Date;
   lastConversation: any[];
 }) => {
-  const slimConvo = context.lastConversation?.slice(-10).map(m => 
-    `${m.role}: ${m.content}`
-  ).join('\n');
+  const slimConvo = context.lastConversation?.slice(-10).map(m => {
+    if (m.role === 'bethany') {
+      return `You said: ${m.content}`;
+    } else {
+      return `Him: ${m.content}`;
+    }
+  }).join('\n');
 
   return `Time: ${context.currentTime.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })}
 
-${slimConvo || ''}`;
+Recent texts:
+${slimConvo || '(starting fresh)'}`;
 };
