@@ -217,15 +217,41 @@ Most of the time, [silent] is the right answer. You have your own life.`;
   }
 
   async getRecentConversation(limit: number = 20) {
-    // Only get messages from the last 4 hours
-    // If someone slept, it's a fresh conversation
+    // Get the most recent message first to check the gap
+    const lastMessage = await this.env.DB.prepare(`
+      SELECT created_at FROM bethany_conversations 
+      ORDER BY created_at DESC LIMIT 1
+    `).first() as { created_at: string } | null;
+    
+    if (!lastMessage) {
+      return []; // No history, fresh start
+    }
+    
+    // Check if we should start fresh:
+    // If it's after midnight (Central) AND there's a 3+ hour gap
+    const now = new Date();
+    const centralHour = parseInt(now.toLocaleString('en-US', { 
+      timeZone: 'America/Chicago', 
+      hour: 'numeric', 
+      hour12: false 
+    }));
+    
+    const lastMessageTime = new Date(lastMessage.created_at + 'Z'); // SQLite stores UTC
+    const hoursSinceLastMessage = (now.getTime() - lastMessageTime.getTime()) / (1000 * 60 * 60);
+    
+    // After midnight (0-6am) with 3+ hour gap = fresh start
+    if (centralHour >= 0 && centralHour < 6 && hoursSinceLastMessage >= 3) {
+      return []; // Fresh conversation
+    }
+    
+    // Otherwise, get recent messages
     const result = await this.env.DB.prepare(`
       SELECT role, content, created_at 
       FROM bethany_conversations 
-      WHERE created_at > datetime('now', '-4 hours')
       ORDER BY created_at DESC 
       LIMIT ?
     `).bind(limit).all();
+    
     return result.results.reverse();
   }
 
