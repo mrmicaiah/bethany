@@ -11,7 +11,14 @@ import {
   getSparks
 } from './library';
 import { getSessionListForContext } from './sessions';
-import { getTextingVoice } from './voice';
+
+// Version info - update version.json, this pulls from it at build time
+const VERSION = {
+  version: "0.14.0",
+  updated: "2026-01-18",
+  codename: "voice-update",
+  features: ["gap-triggered-outreach", "session-archive-5mo", "ai-session-titles", "anna-kendrick-voice", "natural-emojis"]
+};
 
 interface Env {
   DB: D1Database;
@@ -42,6 +49,28 @@ export default {
     // Get the singleton Bethany instance
     const id = env.BETHANY.idFromName('bethany-v14');
     const bethany = env.BETHANY.get(id);
+
+    // ============================================
+    // VERSION & HEALTH
+    // ============================================
+    
+    // Health check with version info
+    if (url.pathname === '/health') {
+      return new Response(JSON.stringify({
+        status: 'ok',
+        ...VERSION,
+        timestamp: new Date().toISOString()
+      }, null, 2), { 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+    
+    // Quick version check
+    if (url.pathname === '/version') {
+      return new Response(`Bethany v${VERSION.version} (${VERSION.codename}) - ${VERSION.updated}`, {
+        headers: { ...corsHeaders, 'Content-Type': 'text/plain' }
+      });
+    }
 
     // ============================================
     // LIBRARY API ROUTES
@@ -117,14 +146,6 @@ export default {
     if (url.pathname === '/library/ideas') {
       const sparks = await getSparks(env.MEMORY);
       return new Response(JSON.stringify(sparks), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      });
-    }
-    
-    // Get texting voice
-    if (url.pathname === '/library/craft/voice') {
-      const voice = await getTextingVoice(env.MEMORY);
-      return new Response(JSON.stringify(voice), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
@@ -241,16 +262,6 @@ export default {
     // Debug: check outreach state
     if (url.pathname === '/debug/outreach') {
       return bethany.fetch(new Request('https://bethany/debug/outreach'));
-    }
-    
-    // Debug: check texting voice
-    if (url.pathname === '/debug/voice') {
-      return bethany.fetch(new Request('https://bethany/debug/voice'));
-    }
-
-    // Health check
-    if (url.pathname === '/health') {
-      return new Response('Bethany v14 - texting voice');
     }
 
     return new Response('Not found', { status: 404 });
