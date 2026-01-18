@@ -9,6 +9,12 @@ binding = "DB"
 database_name = "productivity-brain"
 database_id = "be348cf9-552b-41ae-a1d8-cd20be25d6ee"
 
+# Bethany's long-term memory (R2)
+# Run: npx wrangler r2 bucket create bethany-memory
+[[r2_buckets]]
+binding = "MEMORY"
+bucket_name = "bethany-memory"
+
 # Bethany's Durable Object
 [[durable_objects.bindings]]
 name = "BETHANY"
