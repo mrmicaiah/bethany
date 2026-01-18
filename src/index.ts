@@ -102,7 +102,7 @@ export default {
 
     // Health check
     if (url.pathname === '/health') {
-      return new Response('Bethany v10 - with memory');
+      return new Response('Bethany v10 - with R2 memory');
     }
 
     return new Response('Not found', { status: 404 });
