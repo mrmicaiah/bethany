@@ -11,6 +11,7 @@ import {
 } from './types';
 
 export * from './types';
+export * from './extraction';
 
 interface MemoryEnv {
   MEMORY: R2Bucket;
@@ -132,6 +133,48 @@ export async function addHighlight(env: MemoryEnv, highlight: string): Promise<v
 }
 
 // ============================================
+// ARRAY HELPERS (for appending to lists)
+// ============================================
+
+export async function appendToCore(
+  env: MemoryEnv,
+  field: 'interests' | 'goals' | 'quirks' | 'values' | 'fears',
+  items: string[]
+): Promise<void> {
+  if (!items || items.length === 0) return;
+  
+  const current = await loadCoreMemory(env);
+  const existing = current[field] || [];
+  const newItems = items.filter(item => !existing.includes(item));
+  
+  if (newItems.length > 0) {
+    current[field] = [...existing, ...newItems];
+    current.last_updated = new Date().toISOString();
+    await env.MEMORY.put('core.json', JSON.stringify(current, null, 2));
+    console.log(`Added to ${field}:`, newItems);
+  }
+}
+
+export async function appendToPreferences(
+  env: MemoryEnv,
+  field: 'likes' | 'dislikes' | 'pet_peeves',
+  items: string[]
+): Promise<void> {
+  if (!items || items.length === 0) return;
+  
+  const current = await loadCoreMemory(env);
+  const existing = current.preferences[field] || [];
+  const newItems = items.filter(item => !existing.includes(item));
+  
+  if (newItems.length > 0) {
+    current.preferences[field] = [...existing, ...newItems];
+    current.last_updated = new Date().toISOString();
+    await env.MEMORY.put('core.json', JSON.stringify(current, null, 2));
+    console.log(`Added to preferences.${field}:`, newItems);
+  }
+}
+
+// ============================================
 // PEOPLE MEMORY
 // ============================================
 
@@ -210,6 +253,20 @@ export async function resolveThread(env: MemoryEnv, threadId: string): Promise<v
   }
 }
 
+export async function resolveThreadByTopic(env: MemoryEnv, topic: string): Promise<void> {
+  const threads = await loadThreads(env);
+  const thread = threads.active_threads.find(
+    t => t.topic.toLowerCase().includes(topic.toLowerCase()) && !t.resolved
+  );
+  
+  if (thread) {
+    thread.resolved = true;
+    threads.last_updated = new Date().toISOString();
+    await env.MEMORY.put('threads.json', JSON.stringify(threads, null, 2));
+    console.log(`Resolved thread: ${thread.topic}`);
+  }
+}
+
 export async function touchThread(env: MemoryEnv, threadId: string): Promise<void> {
   const threads = await loadThreads(env);
   const thread = threads.active_threads.find(t => t.id === threadId);
@@ -244,7 +301,7 @@ async function loadThreads(env: MemoryEnv): Promise<ThreadsMemory> {
 // FORMAT FOR PROMPT
 // ============================================
 
-export function formatMemoryForPrompt(hotMemory: HotMemory): string {
+export function formatMemoryForPrompt(hotMemory: HotMemory, people?: PeopleMemory): string {
   const { core, relationship, threads } = hotMemory;
   
   let memoryText = '## What you know about him\n\n';
@@ -276,6 +333,15 @@ export function formatMemoryForPrompt(hotMemory: HotMemory): string {
   
   if (core.quirks.length > 0) {
     memoryText += `Quirks: ${core.quirks.join(', ')}\n`;
+  }
+  
+  // People in his life
+  if (people && people.people.length > 0) {
+    memoryText += `\n## People in his life\n\n`;
+    people.people.slice(0, 10).forEach(p => {
+      const facts = p.key_facts.length > 0 ? ` — ${p.key_facts.join(', ')}` : '';
+      memoryText += `- ${p.name} (${p.relationship_to_user})${facts}\n`;
+    });
   }
   
   // Relationship
