@@ -1,5 +1,5 @@
 import { BETHANY_SYSTEM_PROMPT, getContextualPrompt } from './personality';
-import { loadHotMemory, loadPeople, formatMemoryForContext, initializeMemory, addSelfNote, addConversationSummary } from './memory';
+import { loadHotMemory, loadPeople, formatMemoryForContext, initializeMemory, addSelfNote, addConversationSummary, updateCore, addPerson, updateRelationship, addThread, resolveThread, PersonMemory } from './memory';
 import { 
   initializeLibrary, 
   getWritingStatus, 
@@ -55,6 +55,39 @@ interface BethanyState {
   // Proactive outreach tracking
   outreachesToday: number;
   lastOutreachDate: string | null;  // YYYY-MM-DD
+}
+
+// ============================================
+// FACT EXTRACTION TYPES
+// ============================================
+
+interface ExtractionResult {
+  core_updates: {
+    name?: string | null;
+    age?: string | null;
+    location?: string | null;
+    job?: {
+      title?: string | null;
+      company?: string | null;
+      industry?: string | null;
+    };
+    relationship_status?: string | null;
+  } | null;
+  people_updates: Array<{
+    slug: string;
+    name: string;
+    relationship: string;
+    facts: string[];
+    sentiment: 'positive' | 'negative' | 'neutral' | 'complicated';
+  }>;
+  new_interests: string[];
+  new_likes: string[];
+  new_dislikes: string[];
+  new_goals: string[];
+  new_quirks: string[];
+  inside_joke: string | null;
+  thread_to_open: { topic: string; context: string } | null;
+  thread_to_close: string | null;
 }
 
 export class Bethany implements DurableObject {
@@ -591,6 +624,274 @@ Requirements:
       
       await addMessageToSession(this.env.MEMORY, 'bethany', textMessage);
       await this.sendMessage(textMessage);
+      
+      // Extract facts from this exchange and update memory
+      await this.extractAndStoreFacts(message, textMessage);
+    }
+  }
+
+  // ============================================
+  // FACT EXTRACTION (runs after each exchange)
+  // ============================================
+
+  async extractAndStoreFacts(userMessage: string, aiResponse: string): Promise<void> {
+    try {
+      // Load current memory state for context
+      const hotMemory = await loadHotMemory(this.env.MEMORY);
+      const people = await loadPeople(this.env.MEMORY);
+      const memoryContext = hotMemory ? formatMemoryForContext(hotMemory, people) : '';
+
+      const extractionPrompt = `## Current Memory State
+${memoryContext}
+
+## New Exchange
+
+**Him**: ${userMessage}
+
+**You replied**: ${aiResponse}
+
+---
+
+Extract any NEW facts worth remembering. Be selective — only extract things that would be useful to remember in future conversations.
+
+What to extract:
+- Core facts (name, age, location, job changes, relationship status)
+- New people mentioned with their relationship to him
+- New facts about known people
+- Interests, likes, dislikes
+- Goals or aspirations
+- Quirks or habits
+- Inside jokes (if something becomes a recurring reference)
+- Topics to follow up on later
+- Topics that were resolved
+
+What NOT to extract:
+- Things already in memory
+- Trivial conversational filler
+- Temporary states ("I'm tired today")
+- Anything uncertain or ambiguous
+
+Respond with JSON only:
+{
+  "core_updates": {
+    "name": "string or null",
+    "age": "string or null",
+    "location": "string or null",
+    "job": { "title": "string or null", "company": "string or null", "industry": "string or null" },
+    "relationship_status": "string or null"
+  },
+  "people_updates": [
+    { "slug": "lowercase-no-spaces", "name": "Display Name", "relationship": "who they are to him", "facts": ["fact"], "sentiment": "positive|negative|neutral|complicated" }
+  ],
+  "new_interests": ["interest"],
+  "new_likes": ["like"],
+  "new_dislikes": ["dislike"],
+  "new_goals": ["goal"],
+  "new_quirks": ["quirk"],
+  "inside_joke": "string or null",
+  "thread_to_open": { "topic": "topic", "context": "brief context" },
+  "thread_to_close": "topic name or null"
+}
+
+Use null/empty arrays for fields with no updates.`;
+
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': this.env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 1024,
+          system: 'You extract facts from conversations to update a memory system. Respond with valid JSON only.',
+          messages: [{ role: 'user', content: extractionPrompt }],
+        }),
+      });
+
+      if (!response.ok) {
+        console.error('Extraction API error:', await response.text());
+        return;
+      }
+
+      const data = await response.json() as any;
+      const text = data.content?.find((b: any) => b.type === 'text')?.text;
+      
+      if (!text) {
+        console.log('No extraction text returned');
+        return;
+      }
+
+      // Parse JSON (handle markdown code blocks)
+      let jsonStr = text.trim();
+      if (jsonStr.startsWith('```')) {
+        jsonStr = jsonStr.replace(/```json?\n?/g, '').replace(/```\n?$/g, '');
+      }
+
+      const result = JSON.parse(jsonStr) as ExtractionResult;
+      
+      // Apply extracted facts to memory
+      await this.applyExtractionToMemory(result);
+      
+    } catch (error) {
+      console.error('Fact extraction failed:', error);
+      // Don't throw - extraction failure shouldn't break the conversation
+    }
+  }
+
+  // ============================================
+  // APPLY EXTRACTION TO MEMORY
+  // ============================================
+
+  async applyExtractionToMemory(result: ExtractionResult): Promise<void> {
+    const now = new Date().toISOString();
+    let updatesApplied = 0;
+
+    // Apply core updates
+    if (result.core_updates) {
+      const core = result.core_updates;
+      const updates: any = {};
+      
+      if (core.name) updates.name = core.name;
+      if (core.age) updates.age = core.age;
+      if (core.location) updates.location = core.location;
+      if (core.relationship_status) updates.relationship_status = core.relationship_status;
+      
+      if (core.job && (core.job.title || core.job.company || core.job.industry)) {
+        updates.job = {};
+        if (core.job.title) updates.job.title = core.job.title;
+        if (core.job.company) updates.job.company = core.job.company;
+        if (core.job.industry) updates.job.industry = core.job.industry;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        await updateCore(this.env.MEMORY, updates);
+        console.log('Updated core memory:', Object.keys(updates));
+        updatesApplied++;
+      }
+    }
+
+    // Apply array updates (interests, likes, dislikes, goals, quirks)
+    const arrayUpdates: Record<string, string[]> = {
+      interests: result.new_interests || [],
+      goals: result.new_goals || [],
+      quirks: result.new_quirks || [],
+    };
+
+    for (const [field, items] of Object.entries(arrayUpdates)) {
+      if (items.length > 0) {
+        // Load current, merge, save
+        const obj = await this.env.MEMORY.get('micaiah/core.json');
+        if (obj) {
+          const core = JSON.parse(await obj.text());
+          const existing = core[field] || [];
+          const newItems = items.filter((item: string) => !existing.includes(item));
+          if (newItems.length > 0) {
+            core[field] = [...existing, ...newItems];
+            core.last_updated = now;
+            await this.env.MEMORY.put('micaiah/core.json', JSON.stringify(core, null, 2));
+            console.log(`Added to ${field}:`, newItems);
+            updatesApplied++;
+          }
+        }
+      }
+    }
+
+    // Apply preference updates (likes, dislikes)
+    if (result.new_likes?.length > 0 || result.new_dislikes?.length > 0) {
+      const obj = await this.env.MEMORY.get('micaiah/core.json');
+      if (obj) {
+        const core = JSON.parse(await obj.text());
+        let changed = false;
+        
+        if (result.new_likes?.length > 0) {
+          const existing = core.preferences?.likes || [];
+          const newItems = result.new_likes.filter(item => !existing.includes(item));
+          if (newItems.length > 0) {
+            core.preferences = core.preferences || { likes: [], dislikes: [] };
+            core.preferences.likes = [...existing, ...newItems];
+            console.log('Added likes:', newItems);
+            changed = true;
+          }
+        }
+        
+        if (result.new_dislikes?.length > 0) {
+          const existing = core.preferences?.dislikes || [];
+          const newItems = result.new_dislikes.filter(item => !existing.includes(item));
+          if (newItems.length > 0) {
+            core.preferences = core.preferences || { likes: [], dislikes: [] };
+            core.preferences.dislikes = [...existing, ...newItems];
+            console.log('Added dislikes:', newItems);
+            changed = true;
+          }
+        }
+        
+        if (changed) {
+          core.last_updated = now;
+          await this.env.MEMORY.put('micaiah/core.json', JSON.stringify(core, null, 2));
+          updatesApplied++;
+        }
+      }
+    }
+
+    // Apply people updates
+    if (result.people_updates?.length > 0) {
+      for (const person of result.people_updates) {
+        await addPerson(this.env.MEMORY, {
+          name: person.name,
+          relationship: person.relationship,
+          key_facts: person.facts || [],
+          sentiment: person.sentiment || 'neutral',
+          last_mentioned: now,
+          mention_count: 1,
+        });
+        console.log('Added/updated person:', person.name);
+        updatesApplied++;
+      }
+    }
+
+    // Apply inside joke
+    if (result.inside_joke) {
+      const obj = await this.env.MEMORY.get('micaiah/relationship.json');
+      if (obj) {
+        const rel = JSON.parse(await obj.text());
+        if (!rel.inside_jokes.includes(result.inside_joke)) {
+          rel.inside_jokes.push(result.inside_joke);
+          rel.last_updated = now;
+          await this.env.MEMORY.put('micaiah/relationship.json', JSON.stringify(rel, null, 2));
+          console.log('Added inside joke:', result.inside_joke);
+          updatesApplied++;
+        }
+      }
+    }
+
+    // Open new thread
+    if (result.thread_to_open) {
+      await addThread(this.env.MEMORY, result.thread_to_open.topic, result.thread_to_open.context);
+      console.log('Opened thread:', result.thread_to_open.topic);
+      updatesApplied++;
+    }
+
+    // Close thread
+    if (result.thread_to_close) {
+      // Find and resolve thread by topic
+      const obj = await this.env.MEMORY.get('micaiah/threads.json');
+      if (obj) {
+        const threads = JSON.parse(await obj.text());
+        const thread = threads.active?.find((t: any) => 
+          t.topic.toLowerCase().includes(result.thread_to_close!.toLowerCase()) && !t.resolved
+        );
+        if (thread) {
+          await resolveThread(this.env.MEMORY, thread.id);
+          console.log('Resolved thread:', thread.topic);
+          updatesApplied++;
+        }
+      }
+    }
+
+    if (updatesApplied > 0) {
+      console.log(`Fact extraction applied ${updatesApplied} updates to memory`);
     }
   }
 
