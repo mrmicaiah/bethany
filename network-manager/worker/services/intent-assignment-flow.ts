@@ -1,95 +1,87 @@
 /**
- * Intent Assignment Flow — Helping Users Sort Contacts by Relationship Goal
+ * Intent Assignment Flow — Sort Contacts into Relationship Layers
  *
- * Contacts need an intent (inner_circle, nurture, maintain, transactional,
- * dormant) for the nudge system to work. When a contact has a circle but
- * no intent (still 'new'), Bethany surfaces them for sorting.
+ * This service handles the conversational flow for assigning intents to
+ * contacts that have circles but no intent set. It integrates with the
+ * weekly sorting session and can also run standalone.
  *
- * TWO ENTRY POINTS:
+ * THE PROBLEM:
  *
- *   1. Weekly Sorting Session (proactive)
- *      - Scheduled cron triggers batch sorting
- *      - Bethany texts: "Hey! I noticed 3 contacts need sorting..."
- *      - User responds to each one in sequence
+ *   Contacts without intent are incomplete. The nudge system relies on
+ *   intent to calculate cadence and health status. A contact in the
+ *   "Friends" circle with no intent won't generate nudges, which means
+ *   they'll silently drift out of the user's life.
  *
- *   2. Inline Sorting (reactive)
- *      - User adds a contact via SMS or braindump
- *      - Bethany follows up: "What's the goal with [Name]?"
- *      - Part of the natural conversation flow
+ * THE FLOW:
  *
- * CONVERSATION FLOW:
+ *   1. Query: Find contacts with circle assignments but intent = 'new'
+ *   2. Present: For each contact, show context and ask about the goal
+ *   3. Map: Convert natural language responses to intent types
+ *   4. Suggest: If user is unsure, suggest based on circle + Dunbar research
+ *   5. Apply: Update the contact's intent and recalculate health
  *
- *   [Bethany surfaces unsorted contact]
- *   "Mike Johnson (Golf Buddies) — what's the goal here?
- *    Stay in touch casually, deepen the relationship, or just keep him on file?"
- *   ↓
- *   [User responds: "casual" or "stay in touch"]
- *   ↓
- *   [Bethany maps to 'maintain', confirms, moves to next contact]
- *   "Got it — maintain it is. I'll nudge you monthly. Next up..."
+ * BETHANY'S VOICE:
+ *
+ *   The prompts should feel like a helpful friend checking in, not a
+ *   database form. Example:
+ *
+ *   "What's the goal with Mike Johnson from Golf Buddies? Stay in touch
+ *   casually, deepen the relationship, or just keep him on file?"
  *
  * INTENT MAPPING:
  *
- *   The user speaks naturally; Bethany maps to intent types:
- *
- *   inner_circle:
- *     - "family" (when it's a non-kin close relationship)
- *     - "closest", "best friend", "my person", "weekly"
- *
- *   nurture:
- *     - "deepen", "grow", "invest", "build"
- *     - "strategic" (business relationships to cultivate)
- *     - "getting closer", "want to know better"
- *
- *   maintain:
- *     - "casual", "stay in touch", "keep warm"
- *     - "monthly", "check in sometimes"
- *     - "don't want to lose touch"
- *
- *   transactional:
- *     - "professional", "business", "networking"
- *     - "when I need something", "useful contact"
- *     - "quarterly", "occasional"
- *
- *   dormant:
- *     - "keep on file", "not now", "pause"
- *     - "don't remind me", "archive"
- *     - "maybe later", "not a priority"
+ *   User says...                    → Maps to...
+ *   "stay in touch"                 → maintain
+ *   "deepen" / "grow" / "invest"    → nurture
+ *   "keep on file" / "maybe later"  → dormant
+ *   "strategic" / "professional"    → transactional (or nurture if warm)
+ *   "family" / "closest"            → inner_circle (or maintain for extended)
  *
  * CIRCLE-BASED SUGGESTIONS:
  *
- *   When user is unsure ("I don't know", "not sure", "?"), Bethany
- *   suggests based on the circle:
+ *   When a user says "not sure" or "you decide", Bethany suggests:
  *
- *   - Family → inner_circle or maintain (ask if they're close)
- *   - Friends → nurture or maintain (ask about investment level)
- *   - Work → nurture or transactional (ask about strategic value)
- *   - Community → maintain (default social cadence)
- *   - Custom circles → maintain (safe default)
+ *   Family circle     → inner_circle (immediate) or maintain (extended)
+ *   Friends circle    → nurture (close friends) or maintain (casual)
+ *   Work circle       → transactional (colleagues) or nurture (mentors)
+ *   Community circle  → maintain (default) or transactional
  *
  * STATE MANAGEMENT:
  *
- *   IntentSortingDO (Durable Object) tracks:
- *   - Queue of contacts to sort
- *   - Current contact being discussed
- *   - Session start time (expires after 30 minutes)
+ *   When Bethany presents a contact for sorting, she stores pending context
+ *   so the next message can be interpreted correctly:
  *
- * @see worker/services/contact-service.ts for contact updates
- * @see shared/intent-config.ts for intent configurations
- * @see worker/services/conversation-router.ts for routing integration
+ *   {
+ *     type: 'intent_assignment',
+ *     contactId: 'uuid',
+ *     contactName: 'Mike Johnson',
+ *     circles: ['Golf Buddies'],
+ *     suggestedIntent: 'maintain',
+ *     presentedAt: '2026-02-05T...'
+ *   }
+ *
+ * INTEGRATION POINTS:
+ *
+ *   - Called by nudge-service.ts during the weekly sorting session
+ *   - Can be triggered by conversation-router.ts when user says "sort my contacts"
+ *   - Dashboard can show unsorted contacts as a to-do item
+ *
+ * @see worker/services/nudge-service.ts for weekly session integration
+ * @see worker/services/conversation-router.ts for SMS routing
+ * @see shared/intent-config.ts for INTENT_CONFIGS
  */
 
 import type { Env } from '../../shared/types';
-import type { UserRow, ContactRow, IntentType, CircleRow } from '../../shared/models';
+import type { UserRow, ContactRow, IntentType, ContactSummary } from '../../shared/models';
 import { INTENT_CONFIGS } from '../../shared/intent-config';
-import { updateContact, listContacts } from './contact-service';
+import { updateContact, getContactWithCircles, listContacts } from './contact-service';
 
 // ===========================================================================
 // Types
 // ===========================================================================
 
 /**
- * A contact pending intent assignment.
+ * A contact that needs intent assignment.
  */
 export interface UnsortedContact {
   contactId: string;
@@ -97,37 +89,52 @@ export interface UnsortedContact {
   circles: Array<{ id: string; name: string }>;
   notes: string | null;
   createdAt: string;
+  /** Bethany's suggested intent based on circles */
+  suggestedIntent: IntentType;
+  /** Reasoning for the suggestion */
+  suggestionReason: string;
 }
 
 /**
- * State for an active intent sorting session.
+ * Pending context for intent assignment.
  */
-export interface IntentSortingState {
-  userId: string;
-  queue: UnsortedContact[];
-  currentIndex: number;
-  startedAt: string;
-  lastMessageAt: string;
+export interface PendingIntentAssignmentContext {
+  type: 'intent_assignment';
+  contactId: string;
+  contactName: string;
+  circles: string[];
+  suggestedIntent: IntentType;
+  presentedAt: string;
 }
 
 /**
  * Result of parsing user's intent response.
  */
-export type IntentParseResult =
-  | { type: 'intent'; intent: IntentType; confidence: 'high' | 'medium' }
-  | { type: 'unsure' }
-  | { type: 'skip' }
-  | { type: 'stop' }
-  | { type: 'unclear' };
+export interface IntentResponseParsed {
+  /** The resolved intent, or null if unclear */
+  intent: IntentType | null;
+  /** Confidence level */
+  confidence: 'high' | 'medium' | 'low';
+  /** Whether the user asked for a suggestion */
+  wantsSuggestion: boolean;
+  /** Whether to skip this contact */
+  skip: boolean;
+}
 
 /**
- * Circle-based intent suggestion.
+ * Result of the intent assignment flow.
  */
-export interface IntentSuggestion {
-  suggestedIntent: IntentType;
-  reason: string;
-  alternativeIntent?: IntentType;
-  alternativeReason?: string;
+export interface IntentAssignmentResult {
+  /** Bethany's response message */
+  reply: string;
+  /** Whether we're expecting a follow-up */
+  expectsReply: boolean;
+  /** Pending context if expecting reply */
+  pendingContext?: PendingIntentAssignmentContext | null;
+  /** Whether the contact was successfully sorted */
+  sorted: boolean;
+  /** The assigned intent, if sorted */
+  assignedIntent?: IntentType;
 }
 
 // ===========================================================================
@@ -135,20 +142,23 @@ export interface IntentSuggestion {
 // ===========================================================================
 
 /**
- * Get contacts that have at least one circle but still have 'new' intent.
- * These are the contacts that need sorting.
+ * Find contacts that have circle assignments but intent = 'new'.
  *
- * @param env    - Worker environment bindings
- * @param userId - The user whose contacts to check
- * @param limit  - Maximum contacts to return (default: 10)
+ * These are the contacts that need sorting. The query prioritizes:
+ *   1. Contacts with more circles (more context to work with)
+ *   2. Older contacts (been waiting longer)
+ *
+ * @param db     - D1 database binding
+ * @param userId - The user to query
+ * @param limit  - Max contacts to return (default: 5)
  */
 export async function getUnsortedContacts(
-  env: Env,
+  db: D1Database,
   userId: string,
-  limit: number = 10,
+  limit: number = 5,
 ): Promise<UnsortedContact[]> {
-  // Query contacts with intent='new' that have at least one circle
-  const { results } = await env.DB
+  // Find contacts with intent = 'new' that have at least one circle
+  const { results } = await db
     .prepare(
       `SELECT DISTINCT c.id, c.name, c.notes, c.created_at
        FROM contacts c
@@ -164,47 +174,54 @@ export async function getUnsortedContacts(
 
   if (results.length === 0) return [];
 
-  // Batch fetch circles for these contacts
-  const contactIds = results.map(c => c.id);
+  // Batch-fetch circles for these contacts
+  const contactIds = results.map((r) => r.id);
   const placeholders = contactIds.map(() => '?').join(', ');
 
-  const { results: circleRows } = await env.DB
+  const { results: circleLinks } = await db
     .prepare(
-      `SELECT cc.contact_id, cir.id, cir.name
+      `SELECT cc.contact_id, cr.id, cr.name
        FROM contact_circles cc
-       INNER JOIN circles cir ON cc.circle_id = cir.id
+       INNER JOIN circles cr ON cc.circle_id = cr.id
        WHERE cc.contact_id IN (${placeholders})
-       ORDER BY cir.sort_order`
+       ORDER BY cr.sort_order`
     )
     .bind(...contactIds)
     .all<{ contact_id: string; id: string; name: string }>();
 
   // Group circles by contact
   const circleMap = new Map<string, Array<{ id: string; name: string }>>();
-  for (const row of circleRows) {
+  for (const row of circleLinks) {
     const existing = circleMap.get(row.contact_id) ?? [];
     existing.push({ id: row.id, name: row.name });
     circleMap.set(row.contact_id, existing);
   }
 
-  return results.map(c => ({
-    contactId: c.id,
-    name: c.name,
-    circles: circleMap.get(c.id) ?? [],
-    notes: c.notes,
-    createdAt: c.created_at,
-  }));
+  // Build enriched results with suggestions
+  return results.map((row) => {
+    const circles = circleMap.get(row.id) ?? [];
+    const { intent, reason } = suggestIntentFromCircles(circles);
+
+    return {
+      contactId: row.id,
+      name: row.name,
+      circles,
+      notes: row.notes,
+      createdAt: row.created_at,
+      suggestedIntent: intent,
+      suggestionReason: reason,
+    };
+  });
 }
 
 /**
- * Get count of unsorted contacts for a user.
- * Useful for deciding whether to trigger a sorting session.
+ * Count how many contacts need sorting.
  */
-export async function getUnsortedContactCount(
-  env: Env,
+export async function countUnsortedContacts(
+  db: D1Database,
   userId: string,
 ): Promise<number> {
-  const result = await env.DB
+  const result = await db
     .prepare(
       `SELECT COUNT(DISTINCT c.id) as count
        FROM contacts c
@@ -220,534 +237,640 @@ export async function getUnsortedContactCount(
 }
 
 // ===========================================================================
-// Intent Parsing
+// Intent Suggestion Logic
 // ===========================================================================
 
 /**
- * Parse user's response to determine their intended relationship goal.
+ * Suggest an intent based on a contact's circle memberships.
  *
- * Uses keyword matching with semantic understanding. Claude-powered
- * parsing could be added for ambiguous cases, but most responses
- * are clear enough for keyword matching.
+ * Uses Dunbar research to map common circle patterns:
+ *   - Family → inner_circle for immediate family, maintain for extended
+ *   - Friends → nurture for close friends, maintain for casual
+ *   - Work → transactional for colleagues, nurture for mentors/sponsors
+ *   - Community → maintain by default
  *
- * @param userMessage - The user's reply text
- */
-export function parseIntentResponse(userMessage: string): IntentParseResult {
-  const lower = userMessage.toLowerCase().trim();
-
-  // Stop signals — user wants to exit the session
-  const stopSignals = [
-    'stop', 'done', 'enough', 'later', 'exit', 'quit', 'bye',
-    'that\'s all', 'thats all', 'no more', 'finished',
-  ];
-  if (stopSignals.some(s => lower === s || lower.startsWith(s + ' '))) {
-    return { type: 'stop' };
-  }
-
-  // Skip signals — skip this contact for now
-  const skipSignals = [
-    'skip', 'next', 'pass', 'idk', 'not sure yet', 'come back to',
-  ];
-  if (skipSignals.some(s => lower.includes(s))) {
-    return { type: 'skip' };
-  }
-
-  // Unsure signals — ask for suggestion
-  const unsureSignals = [
-    'not sure', 'don\'t know', 'dont know', 'i don\'t know', 'i dont know',
-    'unsure', 'help', 'suggest', 'what do you think', '?', 'idk',
-    'hmm', 'hm', 'um',
-  ];
-  if (unsureSignals.some(s => lower === s || lower.includes(s))) {
-    return { type: 'unsure' };
-  }
-
-  // Inner circle signals
-  const innerCircleSignals = [
-    'inner circle', 'inner-circle', 'innercircle',
-    'closest', 'best friend', 'bestie', 'my person', 'ride or die',
-    'weekly', 'every week', 'talk all the time', 'super close',
-    'like family', 'chosen family', 'core',
-  ];
-  if (innerCircleSignals.some(s => lower.includes(s))) {
-    return { type: 'intent', intent: 'inner_circle', confidence: 'high' };
-  }
-
-  // Nurture signals
-  const nurtureSignals = [
-    'nurture', 'deepen', 'grow', 'invest', 'build',
-    'getting closer', 'want to know better', 'developing',
-    'strategic', 'cultivate', 'important relationship',
-    'working on', 'biweekly', 'every two weeks', 'every couple weeks',
-  ];
-  if (nurtureSignals.some(s => lower.includes(s))) {
-    return { type: 'intent', intent: 'nurture', confidence: 'high' };
-  }
-
-  // Maintain signals
-  const maintainSignals = [
-    'maintain', 'casual', 'stay in touch', 'keep warm', 'keep in touch',
-    'monthly', 'every month', 'check in sometimes', 'occasional',
-    'don\'t want to lose touch', 'dont want to lose', 'keep the connection',
-    'friendly', 'catch up sometimes', 'low key',
-  ];
-  if (maintainSignals.some(s => lower.includes(s))) {
-    return { type: 'intent', intent: 'maintain', confidence: 'high' };
-  }
-
-  // Transactional signals
-  const transactionalSignals = [
-    'transactional', 'professional', 'business', 'networking',
-    'when i need', 'useful', 'contact for', 'resource',
-    'quarterly', 'every few months', 'as needed', 'when relevant',
-    'work contact', 'industry', 'referral',
-  ];
-  if (transactionalSignals.some(s => lower.includes(s))) {
-    return { type: 'intent', intent: 'transactional', confidence: 'high' };
-  }
-
-  // Dormant signals
-  const dormantSignals = [
-    'dormant', 'keep on file', 'on file', 'not now', 'pause',
-    'don\'t remind', 'dont remind', 'archive', 'back burner',
-    'maybe later', 'not a priority', 'not right now', 'hold off',
-    'no need', 'forget about', 'ignore',
-  ];
-  if (dormantSignals.some(s => lower.includes(s))) {
-    return { type: 'intent', intent: 'dormant', confidence: 'high' };
-  }
-
-  // Number-based shortcuts (1-5)
-  const numberMap: Record<string, IntentType> = {
-    '1': 'inner_circle',
-    '2': 'nurture',
-    '3': 'maintain',
-    '4': 'transactional',
-    '5': 'dormant',
-  };
-  if (numberMap[lower]) {
-    return { type: 'intent', intent: numberMap[lower], confidence: 'high' };
-  }
-
-  // Single word shortcuts
-  const wordMap: Record<string, IntentType> = {
-    'close': 'inner_circle',
-    'grow': 'nurture',
-    'invest': 'nurture',
-    'casual': 'maintain',
-    'warm': 'maintain',
-    'pro': 'transactional',
-    'work': 'transactional',
-    'pause': 'dormant',
-    'file': 'dormant',
-  };
-  if (wordMap[lower]) {
-    return { type: 'intent', intent: wordMap[lower], confidence: 'medium' };
-  }
-
-  return { type: 'unclear' };
-}
-
-// ===========================================================================
-// Circle-Based Suggestions
-// ===========================================================================
-
-/**
- * Suggest an intent based on the contact's circle(s).
- *
- * When the user is unsure, Bethany makes an educated guess based on
- * which circle(s) the contact belongs to.
- *
- * @param circles - The contact's circle names
+ * When multiple circles are present, we weight toward the closer layer.
  */
 export function suggestIntentFromCircles(
   circles: Array<{ id: string; name: string }>,
-): IntentSuggestion {
+): { intent: IntentType; reason: string } {
   if (circles.length === 0) {
+    return { intent: 'maintain', reason: 'no circles for context — defaulting to maintain' };
+  }
+
+  const circleNames = circles.map((c) => c.name.toLowerCase());
+
+  // Check for Family circle — suggests close relationship
+  if (circleNames.some((n) => n.includes('family') || n.includes('relatives'))) {
+    // Immediate family tends to be inner_circle, but extended can be maintain
+    // For now, suggest maintain as a safe middle ground — user can elevate to inner_circle
     return {
-      suggestedIntent: 'maintain',
-      reason: "No circles — I'd guess monthly check-ins until you tell me more",
+      intent: 'maintain',
+      reason: 'family contacts usually need at least monthly check-ins',
     };
   }
 
-  const circleNames = circles.map(c => c.name.toLowerCase());
-
-  // Family circle
-  if (circleNames.some(n => n.includes('family'))) {
+  // Check for Work circle — suggests transactional or nurture
+  if (circleNames.some((n) => n.includes('work') || n.includes('colleagues') || n.includes('professional'))) {
     return {
-      suggestedIntent: 'maintain',
-      reason: 'Family usually stays connected naturally — monthly check-ins work well',
-      alternativeIntent: 'inner_circle',
-      alternativeReason: 'unless they\'re someone you talk to every week',
+      intent: 'transactional',
+      reason: 'work contacts typically need quarterly touchpoints',
     };
   }
 
-  // Friends circle
-  if (circleNames.some(n => n.includes('friend'))) {
+  // Check for Friends circle — suggests nurture or maintain
+  if (circleNames.some((n) => n.includes('friend'))) {
     return {
-      suggestedIntent: 'nurture',
-      reason: 'Friendships grow with regular investment — I\'d suggest every couple weeks',
-      alternativeIntent: 'maintain',
-      alternativeReason: 'or monthly if it\'s more of a casual friendship',
+      intent: 'nurture',
+      reason: 'friendships grow with regular investment — suggest every couple weeks',
     };
   }
 
-  // Work circle
-  if (circleNames.some(n => n.includes('work') || n.includes('colleague') || n.includes('coworker'))) {
-    return {
-      suggestedIntent: 'transactional',
-      reason: 'Work contacts usually need attention as-needed, not on a schedule',
-      alternativeIntent: 'nurture',
-      alternativeReason: 'unless you\'re actively building this relationship',
-    };
-  }
-
-  // Community / church / neighborhood
-  if (circleNames.some(n =>
-    n.includes('community') || n.includes('church') ||
-    n.includes('neighbor') || n.includes('club') ||
-    n.includes('group')
+  // Check for Community/Church/Club circles — maintain
+  if (circleNames.some((n) =>
+    n.includes('community') ||
+    n.includes('church') ||
+    n.includes('club') ||
+    n.includes('group') ||
+    n.includes('team')
   )) {
     return {
-      suggestedIntent: 'maintain',
-      reason: 'Community connections stay warm with monthly touchpoints',
+      intent: 'maintain',
+      reason: 'community contacts stay warm with monthly check-ins',
     };
   }
 
-  // Sports / hobby circles
-  if (circleNames.some(n =>
-    n.includes('golf') || n.includes('tennis') || n.includes('gym') ||
-    n.includes('sport') || n.includes('hobby') || n.includes('team')
+  // Check for hobby/activity circles (Golf Buddies, Book Club, etc.)
+  if (circleNames.some((n) =>
+    n.includes('golf') ||
+    n.includes('book') ||
+    n.includes('running') ||
+    n.includes('gaming') ||
+    n.includes('sport')
   )) {
     return {
-      suggestedIntent: 'maintain',
-      reason: 'Activity buddies usually see each other through the activity — monthly check-ins fill the gaps',
+      intent: 'maintain',
+      reason: 'activity-based relationships stay warm with monthly touchpoints',
     };
   }
 
-  // Default for custom circles
+  // Default to maintain — safe middle ground
   return {
-    suggestedIntent: 'maintain',
-    reason: 'Monthly check-ins are a solid default — you can always adjust later',
+    intent: 'maintain',
+    reason: 'monthly check-ins keep most relationships warm',
   };
 }
 
-// ===========================================================================
-// Message Generation
-// ===========================================================================
-
 /**
- * Generate Bethany's question for a single contact.
+ * Get a human-friendly intent suggestion message.
  */
-export function generateSortingQuestion(contact: UnsortedContact): string {
-  const circleList = contact.circles.map(c => c.name).join(', ') || 'no circles';
-  const contextNote = contact.notes ? ` (${truncate(contact.notes, 30)})` : '';
-
-  return `${contact.name} (${circleList})${contextNote} — what's the goal here?\n` +
-    `Stay in touch casually, deepen the relationship, or just keep them on file?`;
-}
-
-/**
- * Generate the intro message for a batch sorting session.
- */
-export function generateBatchSortingIntro(contacts: UnsortedContact[]): string {
-  const count = contacts.length;
-
-  if (count === 1) {
-    return `Hey! I noticed ${contacts[0].name} still needs sorting. Quick question:\n\n` +
-      generateSortingQuestion(contacts[0]);
-  }
-
-  const preview = contacts.slice(0, 3).map(c => c.name).join(', ');
-  const andMore = count > 3 ? ` and ${count - 3} more` : '';
-
-  return `Hey! I've got ${count} contacts that need sorting: ${preview}${andMore}.\n\n` +
-    `Let's knock these out — I'll ask about each one.\n\n` +
-    `First up:\n${generateSortingQuestion(contacts[0])}`;
-}
-
-/**
- * Generate confirmation message after assigning an intent.
- */
-export function generateConfirmation(
-  contact: UnsortedContact,
-  intent: IntentType,
-  hasMore: boolean,
-  nextContact?: UnsortedContact,
+export function formatIntentSuggestion(
+  contactName: string,
+  circles: Array<{ name: string }>,
+  suggestedIntent: IntentType,
 ): string {
-  const config = INTENT_CONFIGS[intent];
-  const cadenceNote = config.defaultCadenceDays
-    ? ` I'll nudge you every ${formatCadence(config.defaultCadenceDays)}.`
-    : '';
+  const circleList = circles.map((c) => c.name).join(', ') || 'no circles';
+  const config = INTENT_CONFIGS[suggestedIntent];
 
-  let message = `Got it — ${contact.name} is now ${config.label}.${cadenceNote}`;
+  let suggestion = `Since ${contactName} is in ${circleList}, I'd guess **${config.label}**`;
 
-  if (hasMore && nextContact) {
-    message += `\n\nNext up:\n${generateSortingQuestion(nextContact)}`;
-  } else if (!hasMore) {
-    message += `\n\nThat's everyone! Your contacts are all sorted. 🎉`;
+  if (suggestedIntent === 'inner_circle') {
+    suggestion += ' — checking in weekly keeps your closest people close.';
+  } else if (suggestedIntent === 'nurture') {
+    suggestion += ' — every couple weeks keeps the relationship growing.';
+  } else if (suggestedIntent === 'maintain') {
+    suggestion += ' — checking in monthly keeps things warm without pressure.';
+  } else if (suggestedIntent === 'transactional') {
+    suggestion += ' — quarterly touchpoints keep the professional connection alive.';
+  } else if (suggestedIntent === 'dormant') {
+    suggestion += ' — no reminders for now, but they stay in your network.';
   }
 
-  return message;
-}
-
-/**
- * Generate suggestion message when user is unsure.
- */
-export function generateSuggestionMessage(
-  contact: UnsortedContact,
-  suggestion: IntentSuggestion,
-): string {
-  let message = `Since ${contact.name} is in ${contact.circles[0]?.name ?? 'your network'}, ` +
-    `I'd guess ${INTENT_CONFIGS[suggestion.suggestedIntent].label} — ${suggestion.reason}`;
-
-  if (suggestion.alternativeIntent) {
-    message += `\n\nOr ${INTENT_CONFIGS[suggestion.alternativeIntent].label} ${suggestion.alternativeReason}`;
-  }
-
-  message += `\n\nSound right? Or tell me what works better.`;
-
-  return message;
-}
-
-/**
- * Generate skip confirmation.
- */
-export function generateSkipMessage(
-  contact: UnsortedContact,
-  hasMore: boolean,
-  nextContact?: UnsortedContact,
-): string {
-  let message = `Skipped ${contact.name} for now — I'll ask again later.`;
-
-  if (hasMore && nextContact) {
-    message += `\n\nNext up:\n${generateSortingQuestion(nextContact)}`;
-  } else if (!hasMore) {
-    message += `\n\nThat's everyone for now!`;
-  }
-
-  return message;
-}
-
-/**
- * Generate clarification request when response is unclear.
- */
-export function generateClarificationMessage(contact: UnsortedContact): string {
-  return `I didn't quite catch that for ${contact.name}. Try one of these:\n\n` +
-    `• "close" or "inner circle" — your closest people (weekly)\n` +
-    `• "nurture" or "invest" — relationships you're growing (biweekly)\n` +
-    `• "casual" or "maintain" — stay in touch (monthly)\n` +
-    `• "professional" — as-needed basis (quarterly)\n` +
-    `• "dormant" or "file" — pause reminders\n\n` +
-    `Or say "skip" to come back to this one later.`;
-}
-
-/**
- * Generate session end message.
- */
-export function generateStopMessage(remaining: number): string {
-  if (remaining === 0) {
-    return `All done! Your contacts are sorted. I'll start nudging you based on the cadences we set.`;
-  }
-
-  return `Got it, we'll pick this up later. ${remaining} contact${remaining === 1 ? '' : 's'} still need${remaining === 1 ? 's' : ''} sorting — I'll remind you.`;
+  return suggestion;
 }
 
 // ===========================================================================
-// Session Handler
+// Response Parsing
 // ===========================================================================
 
 /**
- * Handle user's response during an active sorting session.
+ * Parse the user's response to an intent assignment prompt.
  *
- * Called by the conversation router when pending context is 'intent_sorting'.
- *
- * @param env     - Worker environment bindings
- * @param user    - The user
- * @param message - Their reply text
- * @param state   - Current sorting session state
+ * Maps natural language to intent types:
+ *   - "stay in touch" / "casual" → maintain
+ *   - "deepen" / "grow" / "invest" → nurture
+ *   - "closest" / "family" → inner_circle
+ *   - "keep on file" / "dormant" → dormant
+ *   - "strategic" / "professional" → transactional
+ *   - "not sure" / "you decide" → wantsSuggestion: true
+ *   - "skip" / "later" → skip: true
  */
-export async function handleSortingResponse(
+export function parseIntentResponse(userMessage: string): IntentResponseParsed {
+  const lower = userMessage.toLowerCase().trim();
+
+  // Check for skip signals
+  const skipSignals = ['skip', 'later', 'next', 'pass', 'not now', 'move on'];
+  if (skipSignals.some((s) => lower.includes(s))) {
+    return { intent: null, confidence: 'high', wantsSuggestion: false, skip: true };
+  }
+
+  // Check for "you decide" / suggestion request
+  const suggestionSignals = [
+    'not sure',
+    'you decide',
+    'you pick',
+    'your call',
+    'i don\'t know',
+    'idk',
+    'whatever you think',
+    'suggest',
+    'recommend',
+  ];
+  if (suggestionSignals.some((s) => lower.includes(s))) {
+    return { intent: null, confidence: 'high', wantsSuggestion: true, skip: false };
+  }
+
+  // Check for inner_circle signals
+  const innerCircleSignals = [
+    'inner circle',
+    'closest',
+    'every week',
+    'weekly',
+    'most important',
+    'my person',
+    'best friend',
+    'immediate family',
+  ];
+  if (innerCircleSignals.some((s) => lower.includes(s))) {
+    return { intent: 'inner_circle', confidence: 'high', wantsSuggestion: false, skip: false };
+  }
+
+  // Check for nurture signals
+  const nurtureSignals = [
+    'nurture',
+    'deepen',
+    'grow',
+    'invest',
+    'build',
+    'get closer',
+    'every couple weeks',
+    'biweekly',
+    'important to me',
+  ];
+  if (nurtureSignals.some((s) => lower.includes(s))) {
+    return { intent: 'nurture', confidence: 'high', wantsSuggestion: false, skip: false };
+  }
+
+  // Check for maintain signals
+  const maintainSignals = [
+    'maintain',
+    'stay in touch',
+    'casual',
+    'monthly',
+    'once a month',
+    'keep warm',
+    'check in occasionally',
+  ];
+  if (maintainSignals.some((s) => lower.includes(s))) {
+    return { intent: 'maintain', confidence: 'high', wantsSuggestion: false, skip: false };
+  }
+
+  // Check for transactional signals
+  const transactionalSignals = [
+    'transactional',
+    'professional',
+    'strategic',
+    'business',
+    'quarterly',
+    'networking',
+    'when needed',
+    'as needed',
+  ];
+  if (transactionalSignals.some((s) => lower.includes(s))) {
+    return { intent: 'transactional', confidence: 'high', wantsSuggestion: false, skip: false };
+  }
+
+  // Check for dormant signals
+  const dormantSignals = [
+    'dormant',
+    'keep on file',
+    'maybe later',
+    'not now',
+    'pause',
+    'hold off',
+    'no reminders',
+    'just keep them',
+  ];
+  if (dormantSignals.some((s) => lower.includes(s))) {
+    return { intent: 'dormant', confidence: 'high', wantsSuggestion: false, skip: false };
+  }
+
+  // Family-specific handling
+  if (lower.includes('family') || lower.includes('relative')) {
+    // If they mention family, suggest maintain (safe middle) or inner_circle
+    if (lower.includes('close') || lower.includes('immediate')) {
+      return { intent: 'inner_circle', confidence: 'medium', wantsSuggestion: false, skip: false };
+    }
+    return { intent: 'maintain', confidence: 'medium', wantsSuggestion: false, skip: false };
+  }
+
+  // Affirmative responses (accepting suggestion)
+  const affirmativeSignals = ['yes', 'yeah', 'yep', 'sure', 'ok', 'okay', 'sounds good', 'perfect'];
+  if (affirmativeSignals.some((s) => lower === s || lower === s + '!')) {
+    return { intent: null, confidence: 'high', wantsSuggestion: true, skip: false };
+  }
+
+  // Couldn't determine — low confidence
+  return { intent: null, confidence: 'low', wantsSuggestion: false, skip: false };
+}
+
+// ===========================================================================
+// Flow Handlers
+// ===========================================================================
+
+/**
+ * Generate the initial prompt for a contact that needs sorting.
+ *
+ * This is called when presenting a contact during the sorting session
+ * or when the user asks to sort a specific contact.
+ */
+export function generateIntentPrompt(contact: UnsortedContact): string {
+  const circleList = contact.circles.map((c) => c.name).join(', ') || 'no circles yet';
+
+  let prompt = `What's the goal with **${contact.name}** (${circleList})?`;
+  prompt += `\n\n`;
+  prompt += `Stay in touch casually, deepen the relationship, or just keep them on file?`;
+
+  return prompt;
+}
+
+/**
+ * Handle the user's response to an intent assignment prompt.
+ *
+ * This is called by the conversation router when there's pending
+ * intent assignment context.
+ *
+ * @param env - Worker environment bindings
+ * @param user - The user responding
+ * @param userMessage - Their reply text
+ * @param pendingContext - The intent assignment context
+ */
+export async function handleIntentResponse(
   env: Env,
   user: UserRow,
-  message: string,
-  state: IntentSortingState,
-): Promise<{
-  reply: string;
-  expectsReply: boolean;
-  newState: IntentSortingState | null;
-}> {
-  const currentContact = state.queue[state.currentIndex];
-  if (!currentContact) {
+  userMessage: string,
+  pendingContext: PendingIntentAssignmentContext,
+): Promise<IntentAssignmentResult> {
+  const parsed = parseIntentResponse(userMessage);
+
+  // Handle skip
+  if (parsed.skip) {
     return {
-      reply: 'Looks like we\'ve gone through everyone! Your contacts are sorted.',
+      reply: `Okay, skipping ${pendingContext.contactName} for now. You can sort them later!`,
       expectsReply: false,
-      newState: null,
+      pendingContext: null,
+      sorted: false,
     };
   }
 
-  const parseResult = parseIntentResponse(message);
+  // Handle suggestion request or affirmative (accepting suggestion)
+  if (parsed.wantsSuggestion || (parsed.intent === null && parsed.confidence === 'high')) {
+    // Apply the suggested intent
+    const suggestedIntent = pendingContext.suggestedIntent;
+    const updated = await updateContact(env.DB, user.id, pendingContext.contactId, {
+      intent: suggestedIntent,
+    });
 
-  switch (parseResult.type) {
-    case 'intent': {
-      // Assign the intent
-      await updateContact(env.DB, user.id, currentContact.contactId, {
-        intent: parseResult.intent,
-      });
-
-      // Advance to next contact
-      const newIndex = state.currentIndex + 1;
-      const hasMore = newIndex < state.queue.length;
-      const nextContact = hasMore ? state.queue[newIndex] : undefined;
-
-      const newState: IntentSortingState | null = hasMore
-        ? {
-            ...state,
-            currentIndex: newIndex,
-            lastMessageAt: new Date().toISOString(),
-          }
-        : null;
-
+    if (!updated) {
       return {
-        reply: generateConfirmation(currentContact, parseResult.intent, hasMore, nextContact),
-        expectsReply: hasMore,
-        newState,
-      };
-    }
-
-    case 'unsure': {
-      // Suggest based on circles
-      const suggestion = suggestIntentFromCircles(currentContact.circles);
-      return {
-        reply: generateSuggestionMessage(currentContact, suggestion),
-        expectsReply: true,
-        newState: {
-          ...state,
-          lastMessageAt: new Date().toISOString(),
-        },
-      };
-    }
-
-    case 'skip': {
-      // Move to next, put this one at end of queue
-      const reorderedQueue = [
-        ...state.queue.slice(0, state.currentIndex),
-        ...state.queue.slice(state.currentIndex + 1),
-        currentContact,
-      ];
-      const hasMore = state.currentIndex < reorderedQueue.length - 1;
-      const nextContact = hasMore ? reorderedQueue[state.currentIndex] : undefined;
-
-      const newState: IntentSortingState | null = hasMore
-        ? {
-            ...state,
-            queue: reorderedQueue,
-            lastMessageAt: new Date().toISOString(),
-          }
-        : null;
-
-      return {
-        reply: generateSkipMessage(currentContact, hasMore, nextContact),
-        expectsReply: hasMore,
-        newState,
-      };
-    }
-
-    case 'stop': {
-      const remaining = state.queue.length - state.currentIndex;
-      return {
-        reply: generateStopMessage(remaining),
+        reply: `Hmm, something went wrong updating ${pendingContext.contactName}. Mind trying again?`,
         expectsReply: false,
-        newState: null,
+        pendingContext: null,
+        sorted: false,
       };
     }
 
-    case 'unclear':
-    default: {
+    const config = INTENT_CONFIGS[suggestedIntent];
+    let cadenceNote = '';
+    if (config.defaultCadenceDays) {
+      cadenceNote = ` I'll nudge you to check in every ${config.defaultCadenceDays} days.`;
+    }
+
+    return {
+      reply: `Done! Moved ${pendingContext.contactName} to ${config.label}.${cadenceNote}`,
+      expectsReply: false,
+      pendingContext: null,
+      sorted: true,
+      assignedIntent: suggestedIntent,
+    };
+  }
+
+  // Handle clear intent
+  if (parsed.intent && parsed.confidence !== 'low') {
+    const updated = await updateContact(env.DB, user.id, pendingContext.contactId, {
+      intent: parsed.intent,
+    });
+
+    if (!updated) {
       return {
-        reply: generateClarificationMessage(currentContact),
-        expectsReply: true,
-        newState: {
-          ...state,
-          lastMessageAt: new Date().toISOString(),
-        },
+        reply: `Hmm, something went wrong updating ${pendingContext.contactName}. Mind trying again?`,
+        expectsReply: false,
+        pendingContext: null,
+        sorted: false,
       };
     }
+
+    const config = INTENT_CONFIGS[parsed.intent];
+    let cadenceNote = '';
+    if (config.defaultCadenceDays) {
+      cadenceNote = ` I'll nudge you to check in every ${config.defaultCadenceDays} days.`;
+    }
+
+    return {
+      reply: `Got it! ${pendingContext.contactName} is now in ${config.label}.${cadenceNote}`,
+      expectsReply: false,
+      pendingContext: null,
+      sorted: true,
+      assignedIntent: parsed.intent,
+    };
   }
+
+  // Low confidence — offer suggestion and clarify
+  const circlesList = pendingContext.circles.join(', ');
+  const config = INTENT_CONFIGS[pendingContext.suggestedIntent];
+
+  let clarification = `I'm not sure what you mean. For ${pendingContext.contactName}, you could:\n\n`;
+  clarification += `• "Stay in touch" → Monthly check-ins\n`;
+  clarification += `• "Deepen" → Every couple weeks\n`;
+  clarification += `• "Inner circle" → Weekly\n`;
+  clarification += `• "Keep on file" → No reminders\n\n`;
+  clarification += `Since they're in ${circlesList}, I'd suggest **${config.label}**. Sound good?`;
+
+  return {
+    reply: clarification,
+    expectsReply: true,
+    pendingContext: {
+      ...pendingContext,
+      presentedAt: new Date().toISOString(), // Reset timer
+    },
+    sorted: false,
+  };
 }
 
-// ===========================================================================
-// Session Initiation
-// ===========================================================================
+/**
+ * Start the intent assignment flow for a single contact.
+ *
+ * Called when a user wants to sort a specific contact, or when
+ * presenting the next contact in a sorting session.
+ *
+ * @param env - Worker environment bindings
+ * @param user - The user
+ * @param contactId - The contact to sort
+ */
+export async function startIntentAssignment(
+  env: Env,
+  user: UserRow,
+  contactId: string,
+): Promise<IntentAssignmentResult> {
+  const contact = await getContactWithCircles(env.DB, user.id, contactId);
+
+  if (!contact) {
+    return {
+      reply: "I couldn't find that contact. Maybe it was deleted?",
+      expectsReply: false,
+      sorted: false,
+    };
+  }
+
+  if (contact.intent !== 'new') {
+    const config = INTENT_CONFIGS[contact.intent];
+    return {
+      reply: `${contact.name} is already sorted — they're in ${config.label}. Want to change that?`,
+      expectsReply: true,
+      sorted: false,
+      pendingContext: {
+        type: 'intent_assignment',
+        contactId: contact.id,
+        contactName: contact.name,
+        circles: contact.circles.map((c) => c.name),
+        suggestedIntent: contact.intent,
+        presentedAt: new Date().toISOString(),
+      },
+    };
+  }
+
+  const { intent: suggestedIntent, reason } = suggestIntentFromCircles(contact.circles);
+
+  const prompt = generateIntentPrompt({
+    contactId: contact.id,
+    name: contact.name,
+    circles: contact.circles,
+    notes: contact.notes,
+    createdAt: contact.created_at,
+    suggestedIntent,
+    suggestionReason: reason,
+  });
+
+  return {
+    reply: prompt,
+    expectsReply: true,
+    pendingContext: {
+      type: 'intent_assignment',
+      contactId: contact.id,
+      contactName: contact.name,
+      circles: contact.circles.map((c) => c.name),
+      suggestedIntent,
+      presentedAt: new Date().toISOString(),
+    },
+    sorted: false,
+  };
+}
 
 /**
- * Start a new sorting session for a user.
+ * Get the next unsorted contact and present it for sorting.
  *
- * Called by the weekly cron or when manually triggered.
+ * Used by the weekly sorting session to iterate through contacts.
  *
- * @param env    - Worker environment bindings
- * @param userId - The user to start sorting for
- * @param limit  - Maximum contacts to include in session
+ * @param env - Worker environment bindings
+ * @param user - The user
+ */
+export async function getNextUnsortedAndPrompt(
+  env: Env,
+  user: UserRow,
+): Promise<IntentAssignmentResult & { hasMore: boolean; remaining: number }> {
+  const unsorted = await getUnsortedContacts(env.DB, user.id, 1);
+  const totalRemaining = await countUnsortedContacts(env.DB, user.id);
+
+  if (unsorted.length === 0) {
+    return {
+      reply: "All your contacts are sorted! 🎉 Your network is fully set up.",
+      expectsReply: false,
+      sorted: false,
+      hasMore: false,
+      remaining: 0,
+    };
+  }
+
+  const contact = unsorted[0];
+  const prompt = generateIntentPrompt(contact);
+
+  return {
+    reply: prompt,
+    expectsReply: true,
+    pendingContext: {
+      type: 'intent_assignment',
+      contactId: contact.contactId,
+      contactName: contact.name,
+      circles: contact.circles.map((c) => c.name),
+      suggestedIntent: contact.suggestedIntent,
+      presentedAt: new Date().toISOString(),
+    },
+    sorted: false,
+    hasMore: totalRemaining > 1,
+    remaining: totalRemaining,
+  };
+}
+
+/**
+ * Run a batch sorting session — presents multiple contacts in sequence.
+ *
+ * This generates the opening message for a sorting session. After
+ * each response, handleIntentResponse processes the user's choice,
+ * then getNextUnsortedAndPrompt presents the next contact.
  */
 export async function startSortingSession(
   env: Env,
-  userId: string,
-  limit: number = 10,
-): Promise<{
-  initialMessage: string;
-  state: IntentSortingState;
-} | null> {
-  const unsorted = await getUnsortedContacts(env, userId, limit);
+  user: UserRow,
+): Promise<{ openingMessage: string; pendingContext: PendingIntentAssignmentContext | null; count: number }> {
+  const count = await countUnsortedContacts(env.DB, user.id);
 
-  if (unsorted.length === 0) {
-    return null; // Nothing to sort
+  if (count === 0) {
+    return {
+      openingMessage: "Good news — all your contacts are sorted! Nothing to do here.",
+      pendingContext: null,
+      count: 0,
+    };
   }
 
-  const state: IntentSortingState = {
-    userId,
-    queue: unsorted,
-    currentIndex: 0,
-    startedAt: new Date().toISOString(),
-    lastMessageAt: new Date().toISOString(),
-  };
+  const unsorted = await getUnsortedContacts(env.DB, user.id, 1);
+  const contact = unsorted[0];
+
+  let opening = `You have ${count} contact${count === 1 ? '' : 's'} that need sorting. `;
+  opening += `I'll walk through each one — just tell me what kind of relationship it is.\n\n`;
+  opening += generateIntentPrompt(contact);
 
   return {
-    initialMessage: generateBatchSortingIntro(unsorted),
-    state,
+    openingMessage: opening,
+    pendingContext: {
+      type: 'intent_assignment',
+      contactId: contact.contactId,
+      contactName: contact.name,
+      circles: contact.circles.map((c) => c.name),
+      suggestedIntent: contact.suggestedIntent,
+      presentedAt: new Date().toISOString(),
+    },
+    count,
   };
 }
 
-/**
- * Generate an inline sorting question for a single contact.
- *
- * Used after adding a contact via SMS to immediately ask about intent.
- *
- * @param contact - The contact to ask about
- */
-export function generateInlineSortingQuestion(contact: UnsortedContact): string {
-  if (contact.circles.length === 0) {
-    return `What's the goal with ${contact.name}? ` +
-      `Stay in touch casually, deepen the relationship, or just keep them on file?`;
-  }
+// ===========================================================================
+// Conversation Router Integration
+// ===========================================================================
 
-  return generateSortingQuestion(contact);
+/**
+ * Check if there's a pending intent assignment context for a user.
+ */
+export async function hasPendingIntentAssignmentContext(
+  env: Env,
+  userId: string,
+): Promise<PendingIntentAssignmentContext | null> {
+  // This would typically check a Durable Object or session store
+  // For now, we rely on the conversation router passing the context
+  // Similar pattern to nudge-conversation-flow.ts
+
+  try {
+    // Check if a DO is configured for context storage
+    const doId = (env as any).INTENT_CONTEXT_DO?.idFromName(userId);
+    if (!doId) return null;
+
+    const doStub = (env as any).INTENT_CONTEXT_DO.get(doId);
+    const response = await doStub.fetch(new Request('https://do/context'));
+
+    if (response.status === 404) return null;
+
+    const context = await response.json() as PendingIntentAssignmentContext;
+
+    // Check if context has expired (10 minute window)
+    const presentedAt = new Date(context.presentedAt).getTime();
+    const now = Date.now();
+    if (now - presentedAt > 10 * 60 * 1000) {
+      // Expired — clear it
+      await clearIntentAssignmentContext(env, userId);
+      return null;
+    }
+
+    return context;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Store pending intent assignment context for a user.
+ */
+export async function storeIntentAssignmentContext(
+  env: Env,
+  userId: string,
+  context: PendingIntentAssignmentContext,
+): Promise<void> {
+  try {
+    const doId = (env as any).INTENT_CONTEXT_DO?.idFromName(userId);
+    if (!doId) return;
+
+    const doStub = (env as any).INTENT_CONTEXT_DO.get(doId);
+    await doStub.fetch(new Request('https://do/context', {
+      method: 'PUT',
+      body: JSON.stringify(context),
+    }));
+  } catch (err) {
+    console.error('[intent-flow] Failed to store context:', err);
+  }
+}
+
+/**
+ * Clear pending intent assignment context for a user.
+ */
+export async function clearIntentAssignmentContext(
+  env: Env,
+  userId: string,
+): Promise<void> {
+  try {
+    const doId = (env as any).INTENT_CONTEXT_DO?.idFromName(userId);
+    if (!doId) return;
+
+    const doStub = (env as any).INTENT_CONTEXT_DO.get(doId);
+    await doStub.fetch(new Request('https://do/context', { method: 'DELETE' }));
+  } catch {
+    // Ignore cleanup failures
+  }
 }
 
 // ===========================================================================
-// Durable Object for Session State
+// Durable Object for Intent Assignment Context (Optional)
 // ===========================================================================
 
 /**
- * IntentSortingDO — Stores active intent sorting sessions.
+ * IntentContextDO — Stores pending intent assignment context per user.
  *
- * Sessions expire after 30 minutes of inactivity.
+ * Optional — if not configured, context won't persist between messages.
+ * The conversation router can also pass context directly.
  *
  * Wrangler config:
  *   [[durable_objects.bindings]]
- *   name = "INTENT_SORTING_DO"
- *   class_name = "IntentSortingDO"
+ *   name = "INTENT_CONTEXT_DO"
+ *   class_name = "IntentContextDO"
  */
-export class IntentSortingDO {
+export class IntentContextDO {
   private state: DurableObjectState;
 
   constructor(state: DurableObjectState) {
@@ -757,129 +880,29 @@ export class IntentSortingDO {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
-    if (url.pathname === '/session') {
+    if (url.pathname === '/context') {
       if (request.method === 'GET') {
-        const data = await this.state.storage.get<IntentSortingState>('session');
+        const data = await this.state.storage.get<PendingIntentAssignmentContext>('context');
         if (!data) {
           return new Response(null, { status: 404 });
         }
-
-        // Check expiration (30 minutes)
-        const lastMessage = new Date(data.lastMessageAt).getTime();
-        if (Date.now() - lastMessage > 30 * 60 * 1000) {
-          await this.state.storage.delete('session');
-          return new Response(null, { status: 404 });
-        }
-
         return new Response(JSON.stringify(data), {
           headers: { 'Content-Type': 'application/json' },
         });
       }
 
       if (request.method === 'PUT') {
-        const body = await request.json() as IntentSortingState;
-        await this.state.storage.put('session', body);
+        const body = await request.json() as PendingIntentAssignmentContext;
+        await this.state.storage.put('context', body);
         return new Response('ok', { status: 200 });
       }
 
       if (request.method === 'DELETE') {
-        await this.state.storage.delete('session');
+        await this.state.storage.delete('context');
         return new Response('ok', { status: 200 });
       }
     }
 
     return new Response('Not found', { status: 404 });
   }
-}
-
-// ===========================================================================
-// Session State Management
-// ===========================================================================
-
-/**
- * Get active sorting session for a user.
- */
-export async function getActiveSortingSession(
-  env: Env,
-  userId: string,
-): Promise<IntentSortingState | null> {
-  try {
-    const doId = (env as any).INTENT_SORTING_DO?.idFromName(userId);
-    if (!doId) return null;
-
-    const doStub = (env as any).INTENT_SORTING_DO.get(doId);
-    const response = await doStub.fetch(new Request('https://do/session'));
-
-    if (response.status === 404) return null;
-
-    return await response.json() as IntentSortingState;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Store sorting session state.
- */
-export async function storeSortingSession(
-  env: Env,
-  userId: string,
-  state: IntentSortingState,
-): Promise<void> {
-  try {
-    const doId = (env as any).INTENT_SORTING_DO?.idFromName(userId);
-    if (!doId) return;
-
-    const doStub = (env as any).INTENT_SORTING_DO.get(doId);
-    await doStub.fetch(new Request('https://do/session', {
-      method: 'PUT',
-      body: JSON.stringify(state),
-    }));
-  } catch (err) {
-    console.error('[intent-sorting] Failed to store session:', err);
-  }
-}
-
-/**
- * Clear sorting session.
- */
-export async function clearSortingSession(
-  env: Env,
-  userId: string,
-): Promise<void> {
-  try {
-    const doId = (env as any).INTENT_SORTING_DO?.idFromName(userId);
-    if (!doId) return;
-
-    const doStub = (env as any).INTENT_SORTING_DO.get(doId);
-    await doStub.fetch(new Request('https://do/session', { method: 'DELETE' }));
-  } catch {
-    // Ignore cleanup failures
-  }
-}
-
-// ===========================================================================
-// Utility Functions
-// ===========================================================================
-
-/**
- * Format cadence days as human-readable text.
- */
-function formatCadence(days: number): string {
-  if (days === 1) return 'day';
-  if (days === 7) return 'week';
-  if (days === 14) return 'couple weeks';
-  if (days === 30) return 'month';
-  if (days === 90) return 'quarter';
-  if (days < 7) return `${days} days`;
-  if (days < 30) return `${Math.round(days / 7)} weeks`;
-  return `${Math.round(days / 30)} months`;
-}
-
-/**
- * Truncate text with ellipsis.
- */
-function truncate(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text;
-  return text.substring(0, maxLength - 3) + '...';
 }
