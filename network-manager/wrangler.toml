@@ -14,14 +14,27 @@ database_name = "bethany-network-db"
 binding = "STORAGE"
 bucket_name = "bethany-network-storage"
 
-# Durable Objects — onboarding conversation state
+# ===========================================================================
+# Durable Objects — Conversation State Management
+# ===========================================================================
+
+# Post-signup onboarding conversations
 [[durable_objects.bindings]]
 name = "ONBOARDING_DO"
 class_name = "OnboardingDO"
 
+# Pre-signup discovery conversations (unknown numbers)
+[[durable_objects.bindings]]
+name = "USER_DISCOVERY_DO"
+class_name = "UserDiscoveryDO"
+
 [[migrations]]
 tag = "v1"
 new_classes = ["OnboardingDO"]
+
+[[migrations]]
+tag = "v2"
+new_classes = ["UserDiscoveryDO"]
 
 # ===========================================================================
 # Cron Triggers — Scheduled Jobs
@@ -51,10 +64,11 @@ crons = [
 # Non-secret config
 ENVIRONMENT = "production"
 BETHANY_WORKER_URL = "https://bethany.mrmicaiah.workers.dev"
+SIGNUP_BASE_URL = "https://app.untitledpublishers.com"
 MAX_FREE_CONTACTS = "15"
 TRIAL_DAYS = "14"
 
-# Secrets (set via `wrangler secret put <NAME>`):
+# Secrets (set via `wrangler secret put <n>`):
 # ANTHROPIC_API_KEY      — Claude API for braindump parsing, nudge generation
 # SENDBLUE_API_KEY       — SMS delivery
 # SENDBLUE_API_SECRET    — SMS delivery
