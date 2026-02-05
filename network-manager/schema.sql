@@ -30,6 +30,7 @@ PRAGMA foreign_keys = ON;
 -- preferences via GENDER_MODIFIERS in shared/intent-config.ts.
 -- onboarding_stage tracks SMS onboarding flow (NULL = complete).
 -- last_sorting_offer tracks when we last offered to sort unsorted contacts.
+-- last_trial_reminder and trial_reminder_stage track trial lifecycle messaging.
 -- @see Roberts & Dunbar (2011, 2015) for gender maintenance patterns.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (
@@ -50,6 +51,8 @@ CREATE TABLE IF NOT EXISTS users (
     CHECK (gender IS NULL OR gender IN ('male', 'female')),
   onboarding_stage    TEXT DEFAULT NULL,
   last_sorting_offer  TEXT DEFAULT NULL,
+  last_trial_reminder TEXT DEFAULT NULL,
+  trial_reminder_stage TEXT DEFAULT NULL,
   created_at          TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );

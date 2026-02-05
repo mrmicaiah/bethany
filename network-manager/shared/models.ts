@@ -15,7 +15,7 @@
  */
 
 // ===========================================================================
-// Enums &amp; Literal Types
+// Enums & Literal Types
 // ===========================================================================
 
 /**
@@ -43,8 +43,8 @@ export type HealthStatus = 'green' | 'yellow' | 'red';
  * Kin contacts receive relaxed cadence thresholds because research shows
  * family relationships resist decay even with reduced contact frequency.
  *
- * @see Roberts &amp; Dunbar (2011). The costs of family and friends.
- * @see Roberts &amp; Dunbar (2015). Managing relationship decay.
+ * @see Roberts & Dunbar (2011). The costs of family and friends.
+ * @see Roberts & Dunbar (2015). Managing relationship decay.
  */
 export type ContactKind = 'kin' | 'non_kin';
 
@@ -57,7 +57,7 @@ export type ContactKind = 'kin' | 'non_kin';
  * distinction: a research-backed default that improves the experience
  * for most people without being a hard rule.
  *
- * Research basis (Roberts &amp; Dunbar 2011, 2015):
+ * Research basis (Roberts & Dunbar 2011, 2015):
  *   - Women maintain relationships primarily through conversation
  *     frequency — more frequent check-ins, conversation-based nudges.
  *   - Men maintain relationships primarily through shared activities —
@@ -186,6 +186,20 @@ export type OnboardingStage =
   | 'ready';            // Onboarding complete, user is active
 
 /**
+ * Trial reminder stages — lifecycle messaging touchpoints.
+ *
+ * Tracks which trial-related messages have been sent to avoid duplicates.
+ * Stages progress in order: signup → usage_highlight → upgrade_prompt → expired.
+ *
+ * @see worker/services/trial-messaging-service.ts
+ */
+export type TrialReminderStage =
+  | 'signup'          // Initial "14 days full access" message
+  | 'usage_highlight' // Day 10-12 soft mention of usage stats
+  | 'upgrade_prompt'  // Day 12-13 upgrade CTA with stats
+  | 'expired';        // Day 14 downgrade notification
+
+/**
  * Pending signup token status.
  */
 export type SignupTokenStatus = 'pending' | 'used' | 'expired';
@@ -239,6 +253,23 @@ export interface UserRow {
    * @see worker/services/sorting-checkin-service.ts
    */
   last_sorting_offer: string | null;
+  /**
+   * Last time we sent a trial lifecycle message.
+   * Used to track timing of trial messaging.
+   * null = no trial message sent yet.
+   *
+   * @see worker/services/trial-messaging-service.ts
+   */
+  last_trial_reminder: string | null;
+  /**
+   * Which trial reminder stage was last sent.
+   * Ensures we don't re-send the same message.
+   * null = no trial message sent yet.
+   *
+   * @see TrialReminderStage type
+   * @see worker/services/trial-messaging-service.ts
+   */
+  trial_reminder_stage: TrialReminderStage | null;
   created_at: string;            // ISO timestamp
   updated_at: string;            // ISO timestamp
 }
