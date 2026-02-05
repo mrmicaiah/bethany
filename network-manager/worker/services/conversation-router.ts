@@ -18,6 +18,7 @@
  *   get_suggestions   — "Who should I reach out to?"
  *   manage_circles    — "Add Jake to my Work circle"
  *   sort_contact      — "Move Sarah to inner circle"
+ *   sort_contacts     — "Sort my contacts" / "Help me organize my network"
  *   add_contact       — "Add John Smith, he's a new friend"
  *   braindump         — Long message with multiple contacts/interactions
  *   check_health      — "How's my network looking?"
@@ -67,6 +68,7 @@ export type ConversationIntent =
   | 'get_suggestions'
   | 'manage_circles'
   | 'sort_contact'
+  | 'sort_contacts'   // NEW: Batch sorting session
   | 'add_contact'
   | 'braindump'
   | 'check_health'
@@ -131,7 +133,7 @@ export interface ConversationResponse {
  */
 export interface PendingContext {
   /** What kind of follow-up we're expecting */
-  type: 'clarify_intent' | 'confirm_action' | 'select_contact' | 'select_option';
+  type: 'clarify_intent' | 'confirm_action' | 'select_contact' | 'select_option' | 'intent_assignment';
   /** The original intent being clarified */
   originalIntent: ConversationIntent;
   /** Any data the handler needs carried forward */
@@ -187,7 +189,8 @@ INTENT TYPES:
 - log_interaction: Reporting they connected with someone. "Called Mom yesterday" / "Had lunch with Jake" / "Texted Sarah last week" / "Just saw Dave at the gym"
 - get_suggestions: Asking who to reach out to. "Who should I call?" / "Anyone I'm behind on?" / "Who needs attention?" / "Give me someone to text"
 - manage_circles: Circle operations. "Add Jake to Work" / "Create a Church circle" / "Show my circles" / "Remove Sarah from Friends"
-- sort_contact: Changing someone's intent/layer. "Move Sarah to inner circle" / "Jake should be nurture" / "Put Mom in maintain" / "Sarah is more of a transactional contact"
+- sort_contact: Changing ONE person's intent/layer. "Move Sarah to inner circle" / "Jake should be nurture" / "Put Mom in maintain" / "Sarah is more of a transactional contact"
+- sort_contacts: Organizing MULTIPLE contacts or starting a sorting session. "Sort my contacts" / "Help me organize" / "I have unsorted contacts" / "Let's go through my network" / "Organize my people"
 - add_contact: Adding a new person. "Add John Smith" / "New contact: Sarah Chen, she's a coworker" / "Remember my friend Jake, 555-1234"
 - braindump: Long message mentioning multiple people or events. "This week I called Mom, had coffee with Jake, ran into Sarah at the store, and need to follow up with Dave about the project"
 - check_health: Asking about overall network health. "How's my network?" / "Give me a summary" / "Dashboard" / "Status report"
@@ -206,6 +209,10 @@ ENTITY EXTRACTION:
 
 BRAINDUMP DETECTION:
 If the message mentions 3+ contacts or 2+ distinct interactions, classify as "braindump" regardless of other signals. Braindumps are long, messy, stream-of-consciousness messages.
+
+SORT_CONTACT vs SORT_CONTACTS:
+- sort_contact = ONE specific person being moved to a layer (has a name + optionally a target layer)
+- sort_contacts = Batch/session request to organize multiple contacts (no specific name, or asking about unsorted contacts)
 
 CONFIDENCE:
 - high: Clear intent, unambiguous.
@@ -339,6 +346,46 @@ export async function routeConversation(
   env: Env,
   pendingContext?: PendingContext | null,
 ): Promise<ConversationResponse> {
+  // Check for intent_assignment context first — this takes priority
+  if (pendingContext?.type === 'intent_assignment') {
+    const { handleIntentResponse, PendingIntentAssignmentContext } = await import('./intent-assignment-flow');
+    const intentContext = pendingContext.data as unknown as import('./intent-assignment-flow').PendingIntentAssignmentContext;
+    
+    const result = await handleIntentResponse(env, user, message.body, intentContext);
+    
+    // If sorted and there might be more, offer to continue
+    if (result.sorted && result.pendingContext === null) {
+      const { countUnsortedContacts, getNextUnsortedAndPrompt } = await import('./intent-assignment-flow');
+      const remaining = await countUnsortedContacts(env.DB, user.id);
+      
+      if (remaining > 0) {
+        const next = await getNextUnsortedAndPrompt(env, user);
+        return {
+          reply: result.reply + `\n\n${remaining} more to go. ${next.reply}`,
+          expectsReply: true,
+          pendingContext: next.pendingContext ? {
+            type: 'intent_assignment',
+            originalIntent: 'sort_contacts',
+            data: next.pendingContext as unknown as Record<string, unknown>,
+            createdAt: new Date().toISOString(),
+          } : undefined,
+        };
+      }
+    }
+    
+    // Convert to ConversationResponse
+    return {
+      reply: result.reply,
+      expectsReply: result.expectsReply,
+      pendingContext: result.pendingContext ? {
+        type: 'intent_assignment',
+        originalIntent: 'sort_contacts',
+        data: result.pendingContext as unknown as Record<string, unknown>,
+        createdAt: new Date().toISOString(),
+      } : undefined,
+    };
+  }
+
   // Step 1: Classify the message
   const classified = await classifyMessage(message, env, pendingContext);
 
@@ -392,6 +439,8 @@ function getHandler(intent: ConversationIntent): SubHandler {
       return handleManageCircles;
     case 'sort_contact':
       return handleSortContact;
+    case 'sort_contacts':
+      return handleSortContacts;
     case 'add_contact':
       return handleAddContact;
     case 'braindump':
@@ -668,10 +717,7 @@ const handleManageCircles: SubHandler = async (classified, user, env) => {
 };
 
 /**
- * sort_contact — Change a contact's intent/layer.
- *
- * Future: Full intent change with confirmation, cadence explanation,
- * and automatic health recalculation.
+ * sort_contact — Change a SINGLE contact's intent/layer.
  */
 const handleSortContact: SubHandler = async (classified, user, env) => {
   if (classified.contactNames.length === 0) {
@@ -682,15 +728,30 @@ const handleSortContact: SubHandler = async (classified, user, env) => {
   }
 
   if (!classified.targetIntent) {
+    // Use the intent assignment flow for a single contact
+    const { searchContacts } = await import('./contact-service');
+    const { startIntentAssignment } = await import('./intent-assignment-flow');
+    
+    const name = classified.contactNames[0];
+    const matches = await searchContacts(env.DB, user.id, name, 3);
+    
+    if (matches.length === 0) {
+      return {
+        reply: `I don't have anyone named "${name}" in your network. Want to add them?`,
+        expectsReply: true,
+      };
+    }
+    
+    const result = await startIntentAssignment(env, user, matches[0].id);
     return {
-      reply: `Where do you want to put ${classified.contactNames[0]}? Your options are: Inner Circle, Nurture, Maintain, Transactional, or Dormant.`,
-      expectsReply: true,
-      pendingContext: {
-        type: 'select_option',
+      reply: result.reply,
+      expectsReply: result.expectsReply,
+      pendingContext: result.pendingContext ? {
+        type: 'intent_assignment',
         originalIntent: 'sort_contact',
-        data: { contactName: classified.contactNames[0] },
+        data: result.pendingContext as unknown as Record<string, unknown>,
         createdAt: new Date().toISOString(),
-      },
+      } : undefined,
     };
   }
 
@@ -723,6 +784,39 @@ const handleSortContact: SubHandler = async (classified, user, env) => {
   return {
     reply: `Done! Moved ${contact.name} to ${config.label}.${config.defaultCadenceDays ? ` I'll nudge you to reach out every ${config.defaultCadenceDays} days.` : ''}`,
     expectsReply: false,
+  };
+};
+
+/**
+ * sort_contacts — Start a batch sorting session for unsorted contacts.
+ *
+ * This handler initiates the intent assignment flow for contacts that
+ * have circles but no intent set. It walks through each contact one
+ * by one, asking the user to assign an intent.
+ */
+const handleSortContacts: SubHandler = async (classified, user, env) => {
+  const { startSortingSession, countUnsortedContacts } = await import('./intent-assignment-flow');
+  
+  const count = await countUnsortedContacts(env.DB, user.id);
+  
+  if (count === 0) {
+    return {
+      reply: "All your contacts are sorted! Everyone has a relationship layer assigned. 🎉",
+      expectsReply: false,
+    };
+  }
+  
+  const session = await startSortingSession(env, user);
+  
+  return {
+    reply: session.openingMessage,
+    expectsReply: true,
+    pendingContext: session.pendingContext ? {
+      type: 'intent_assignment',
+      originalIntent: 'sort_contacts',
+      data: session.pendingContext as unknown as Record<string, unknown>,
+      createdAt: new Date().toISOString(),
+    } : undefined,
   };
 };
 
@@ -765,15 +859,19 @@ const handleAddContact: SubHandler = async (classified, user, env) => {
     source: 'sms',
   });
 
+  // Immediately start intent assignment for the new contact
+  const { startIntentAssignment } = await import('./intent-assignment-flow');
+  const result = await startIntentAssignment(env, user, contact.id);
+
   return {
-    reply: `Added ${contact.name} to your network! They're in the "New" category for now. Want to tell me more about them so I can suggest the right cadence?`,
-    expectsReply: true,
-    pendingContext: {
-      type: 'clarify_intent',
-      originalIntent: 'sort_contact',
-      data: { contactId: contact.id, contactName: contact.name },
+    reply: `Added ${contact.name} to your network!\n\n${result.reply}`,
+    expectsReply: result.expectsReply,
+    pendingContext: result.pendingContext ? {
+      type: 'intent_assignment',
+      originalIntent: 'add_contact',
+      data: result.pendingContext as unknown as Record<string, unknown>,
       createdAt: new Date().toISOString(),
-    },
+    } : undefined,
   };
 };
 
@@ -796,17 +894,18 @@ const handleBraindump: SubHandler = async (classified, user, env) => {
 /**
  * check_health — Show a network health summary.
  *
- * Future: Rich dashboard-style summary with health distribution,
- * drift alerts, weekly stats, and streaks.
+ * Includes unsorted contacts as an action item.
  */
 const handleCheckHealth: SubHandler = async (classified, user, env) => {
   const { getHealthCounts, getContactCount } = await import('./contact-service');
   const { getInteractionStats } = await import('./interaction-service');
+  const { countUnsortedContacts } = await import('./intent-assignment-flow');
 
-  const [healthCounts, totalContacts, stats] = await Promise.all([
+  const [healthCounts, totalContacts, stats, unsortedCount] = await Promise.all([
     getHealthCounts(env.DB, user.id),
     getContactCount(env.DB, user.id),
     getInteractionStats(env.DB, user.id, 7),
+    countUnsortedContacts(env.DB, user.id),
   ]);
 
   if (totalContacts === 0) {
@@ -826,11 +925,16 @@ const handleCheckHealth: SubHandler = async (classified, user, env) => {
     reply += `\nMost active: ${stats.mostActiveContact.name} (${stats.mostActiveContact.count}x)`;
   }
 
+  // Add unsorted contacts warning
+  if (unsortedCount > 0) {
+    reply += `\n\n📋 ${unsortedCount} contact${unsortedCount === 1 ? '' : 's'} need sorting. Say "sort my contacts" to assign layers.`;
+  }
+
   if (healthCounts.red > 0) {
     reply += '\n\nWant to see who needs attention?';
   }
 
-  return { reply, expectsReply: healthCounts.red > 0 };
+  return { reply, expectsReply: healthCounts.red > 0 || unsortedCount > 0 };
 };
 
 /**
@@ -875,6 +979,7 @@ const handleHelp: SubHandler = async () => {
       `💡 "Who should I reach out to?" — get suggestions\n` +
       `📊 "How's my network?" — health summary\n` +
       `🏷️ "Move Jake to inner circle" — change someone's layer\n` +
+      `📝 "Sort my contacts" — organize unsorted contacts\n` +
       `➕ "Add Sarah Chen" — new contact\n` +
       `⭕ "Show my circles" — manage circles\n\n` +
       `Or just brain-dump everything — "This week I called Mom, saw Jake at lunch, texted Sarah..." and I'll sort it out.`,
@@ -914,6 +1019,8 @@ function fallbackClassification(body: string): ClassifiedMessage {
     intent = 'check_health';
   } else if (/who should i|who needs|suggest|anyone i/i.test(lower)) {
     intent = 'get_suggestions';
+  } else if (/sort my|organize|unsorted/i.test(lower)) {
+    intent = 'sort_contacts';
   }
 
   return {
@@ -994,7 +1101,7 @@ function formatMethodLabel(method: InteractionMethod): string {
 
 const VALID_INTENTS: ConversationIntent[] = [
   'query_contact', 'log_interaction', 'get_suggestions', 'manage_circles',
-  'sort_contact', 'add_contact', 'braindump', 'check_health',
+  'sort_contact', 'sort_contacts', 'add_contact', 'braindump', 'check_health',
   'small_talk', 'help', 'unknown',
 ];
 
