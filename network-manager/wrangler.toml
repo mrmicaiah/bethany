@@ -1,0 +1,38 @@
+name = "bethany-network-manager"
+main = "worker/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# D1 Database — contact graph, users, interactions
+[[d1_databases]]
+binding = "DB"
+database_name = "bethany-network-db"
+# database_id = "" # Set after: wrangler d1 create bethany-network-db
+
+# R2 for bulk imports, exports, and backups
+[[r2_buckets]]
+binding = "STORAGE"
+bucket_name = "bethany-network-storage"
+
+# Cron triggers for nudge generation and health checks
+[triggers]
+crons = [
+  "0 9 * * *",   # 9am UTC (3am Central) — daily nudge generation
+  "0 14 * * *",  # 2pm UTC (8am Central) — morning delivery window
+  "0 0 * * 0",   # Weekly health recalculation (Sunday midnight UTC)
+]
+
+[vars]
+# Non-secret config
+ENVIRONMENT = "production"
+BETHANY_WORKER_URL = "https://bethany.mrmicaiah.workers.dev"
+MAX_FREE_CONTACTS = 15
+TRIAL_DAYS = 14
+
+# Secrets (set via `wrangler secret put <NAME>`):
+# ANTHROPIC_API_KEY      — Claude API for braindump parsing, nudge generation
+# SENDBLUE_API_KEY       — SMS delivery
+# SENDBLUE_API_SECRET    — SMS delivery
+# SENDBLUE_PHONE_NUMBER  — Bethany's phone number
+# PIN_SIGNING_SECRET     — HMAC signing for PIN verification tokens
+# INTERNAL_API_KEY       — Auth between Bethany worker and Network Manager
