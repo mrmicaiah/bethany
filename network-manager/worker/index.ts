@@ -22,11 +22,12 @@ import { handleScheduled } from './cron/scheduled';
 // Re-export Durable Object classes — Wrangler requires these at the entry point
 export { OnboardingDO } from './services/onboarding-service';
 export { UserDiscoveryDO } from './services/user-discovery-service';
+export { NudgeContextDO } from './services/nudge-conversation-flow';
 
 const VERSION = {
-  version: '0.8.0',
+  version: '0.9.0',
   updated: '2026-02-05',
-  codename: 'user-discovery',
+  codename: 'proactive-nudge-flow',
 };
 
 export default {
