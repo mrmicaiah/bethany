@@ -28,6 +28,8 @@ PRAGMA foreign_keys = ON;
 -- gender is optional (NULL = not set, no gender modifiers applied).
 -- When set, enables gender-aware cadence adjustments and nudge style
 -- preferences via GENDER_MODIFIERS in shared/intent-config.ts.
+-- onboarding_stage tracks SMS onboarding flow (NULL = complete).
+-- last_sorting_offer tracks when we last offered to sort unsorted contacts.
 -- @see Roberts & Dunbar (2011, 2015) for gender maintenance patterns.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (
@@ -46,6 +48,8 @@ CREATE TABLE IF NOT EXISTS users (
   stripe_customer_id  TEXT,
   gender              TEXT DEFAULT NULL
     CHECK (gender IS NULL OR gender IN ('male', 'female')),
+  onboarding_stage    TEXT DEFAULT NULL,
+  last_sorting_offer  TEXT DEFAULT NULL,
   created_at          TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
