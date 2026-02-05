@@ -1,25 +1,23 @@
 import { useState, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useApi, useLazyApi } from '../hooks/useApi';
 import {
   Crown,
   Clock,
+  Zap,
   Users,
   MessageSquare,
   Brain,
-  Bell,
-  Check,
-  X,
-  LogOut,
   Shield,
-  Mail,
-  Key,
-  Loader2,
+  LogOut,
+  Check,
   AlertCircle,
+  Loader2,
+  Eye,
+  EyeOff,
+  ChevronRight,
   Sparkles,
   Download,
-  ChevronRight,
 } from 'lucide-react';
 
 // ===========================================================================
@@ -35,29 +33,23 @@ interface SubscriptionData {
 }
 
 interface UsageData {
-  date: string;
-  messages_sent: number;
-  nudges_generated: number;
-  contacts_added: number;
-  braindumps_processed: number;
+  messagesUsedToday: number;
+  messagesLimit: number;
+  contactsCount: number;
+  contactsLimit: number;
+  braindumpsUsedToday: number;
+  braindumpsLimit: number;
 }
 
-interface ContactHealthData {
-  total: number;
-  byHealth: {
-    green: number;
-    yellow: number;
-    red: number;
-  };
-}
+// ===========================================================================
+// Constants
+// ===========================================================================
 
-// Free tier limits (mirrored from models.ts)
 const FREE_TIER_LIMITS = {
   max_contacts: 15,
   max_messages_per_day: 10,
   max_braindumps_per_day: 1,
-  max_nudges_per_day: 3,
-} as const;
+};
 
 // ===========================================================================
 // Component
@@ -65,27 +57,27 @@ const FREE_TIER_LIMITS = {
 
 export function SettingsPage() {
   const { user, logout, refreshUser } = useAuth();
-  const navigate = useNavigate();
-
-  // API data
   const { data: subscription } = useApi<SubscriptionData>('/api/subscription');
-  const { data: contactHealth } = useApi<ContactHealthData>('/api/contacts/health');
-  
-  // Form states
+  const { data: healthData } = useApi<{ total: number }>('/api/contacts/health');
+
+  // Profile edit state
   const [name, setName] = useState(user?.name || '');
   const [email, setEmail] = useState(user?.email || '');
   const [isSavingProfile, setIsSavingProfile] = useState(false);
-  const [profileSuccess, setProfileSuccess] = useState(false);
-  const [profileError, setProfileError] = useState<string | null>(null);
+  const [profileMessage, setProfileMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // PIN change states
-  const [showPinChange, setShowPinChange] = useState(false);
+  // PIN change state
+  const [showPinModal, setShowPinModal] = useState(false);
   const [currentPin, setCurrentPin] = useState('');
   const [newPin, setNewPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
-  const [isSavingPin, setIsSavingPin] = useState(false);
-  const [pinError, setPinError] = useState<string | null>(null);
-  const [pinSuccess, setPinSuccess] = useState(false);
+  const [showCurrentPin, setShowCurrentPin] = useState(false);
+  const [showNewPin, setShowNewPin] = useState(false);
+  const [isChangingPin, setIsChangingPin] = useState(false);
+  const [pinMessage, setPinMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Logout state
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const { execute: updateUser } = useLazyApi();
   const { execute: changePin } = useLazyApi();
@@ -93,45 +85,22 @@ export function SettingsPage() {
   // Calculate trial days remaining
   const trialDaysLeft = subscription?.trialEndsAt
     ? Math.max(0, Math.ceil((new Date(subscription.trialEndsAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
-    : 0;
+    : null;
 
-  // Determine subscription display
-  const getSubscriptionInfo = () => {
-    if (!subscription) return { label: 'Loading...', description: '', color: 'gray' };
-    
-    if (subscription.isPremium) {
-      return {
-        label: 'Premium',
-        description: 'Unlimited contacts and features',
-        color: 'violet',
-        icon: Crown,
-      };
-    }
-    
-    if (subscription.isTrialActive) {
-      return {
-        label: 'Trial',
-        description: `${trialDaysLeft} day${trialDaysLeft !== 1 ? 's' : ''} remaining`,
-        color: 'bethany',
-        icon: Clock,
-      };
-    }
-    
-    return {
-      label: 'Free',
-      description: `${FREE_TIER_LIMITS.max_contacts} contacts, limited features`,
-      color: 'gray',
-      icon: Users,
-    };
+  // Mock usage data (would come from API in real implementation)
+  const usageData: UsageData = {
+    messagesUsedToday: 3,
+    messagesLimit: FREE_TIER_LIMITS.max_messages_per_day,
+    contactsCount: healthData?.total ?? 0,
+    contactsLimit: FREE_TIER_LIMITS.max_contacts,
+    braindumpsUsedToday: 0,
+    braindumpsLimit: FREE_TIER_LIMITS.max_braindumps_per_day,
   };
 
-  const subInfo = getSubscriptionInfo();
-
   // Save profile changes
-  const handleSaveProfile = async () => {
+  const handleSaveProfile = useCallback(async () => {
     setIsSavingProfile(true);
-    setProfileError(null);
-    setProfileSuccess(false);
+    setProfileMessage(null);
 
     try {
       await updateUser('/api/user', {
@@ -144,31 +113,32 @@ export function SettingsPage() {
       });
 
       await refreshUser();
-      setProfileSuccess(true);
-      setTimeout(() => setProfileSuccess(false), 3000);
+      setProfileMessage({ type: 'success', text: 'Profile updated' });
     } catch (err) {
-      setProfileError(err instanceof Error ? err.message : 'Failed to save');
+      setProfileMessage({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Failed to update profile',
+      });
     } finally {
       setIsSavingProfile(false);
     }
-  };
+  }, [name, email, updateUser, refreshUser]);
 
   // Change PIN
-  const handleChangePin = async () => {
-    setPinError(null);
-    setPinSuccess(false);
+  const handleChangePin = useCallback(async () => {
+    setPinMessage(null);
 
-    // Validate
-    if (!/^\d{4}$/.test(newPin)) {
-      setPinError('PIN must be 4 digits');
+    if (newPin.length !== 4 || !/^\d{4}$/.test(newPin)) {
+      setPinMessage({ type: 'error', text: 'PIN must be 4 digits' });
       return;
     }
+
     if (newPin !== confirmPin) {
-      setPinError('PINs do not match');
+      setPinMessage({ type: 'error', text: 'PINs do not match' });
       return;
     }
 
-    setIsSavingPin(true);
+    setIsChangingPin(true);
 
     try {
       await changePin('/api/user/pin', {
@@ -180,142 +150,158 @@ export function SettingsPage() {
         }),
       });
 
-      setPinSuccess(true);
+      setPinMessage({ type: 'success', text: 'PIN changed successfully' });
       setCurrentPin('');
       setNewPin('');
       setConfirmPin('');
-      setShowPinChange(false);
-      setTimeout(() => setPinSuccess(false), 3000);
+      
+      // Close modal after success
+      setTimeout(() => {
+        setShowPinModal(false);
+        setPinMessage(null);
+      }, 1500);
     } catch (err) {
-      setPinError(err instanceof Error ? err.message : 'Failed to change PIN');
+      setPinMessage({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Failed to change PIN',
+      });
     } finally {
-      setIsSavingPin(false);
+      setIsChangingPin(false);
     }
-  };
+  }, [currentPin, newPin, confirmPin, changePin]);
 
-  // Logout handler
-  const handleLogout = async () => {
+  // Logout
+  const handleLogout = useCallback(async () => {
+    setIsLoggingOut(true);
     await logout();
-    navigate('/login');
-  };
+  }, [logout]);
 
-  // Export handler
-  const handleExport = () => {
+  // Export contacts
+  const handleExport = useCallback(() => {
     window.location.href = '/api/export';
-  };
+  }, []);
 
-  // Upgrade handler
-  const handleUpgrade = async () => {
-    // TODO: Implement Stripe checkout
-    alert('Stripe checkout coming soon!');
-  };
+  const isFreeOrTrial = subscription?.tier === 'free' || subscription?.tier === 'trial';
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-semibold text-gray-900 mb-2">Settings</h1>
-        <p className="text-gray-500">
-          Manage your account, subscription, and preferences.
-        </p>
-      </div>
+    <div className="max-w-2xl mx-auto space-y-6">
+      <h1 className="text-2xl font-semibold text-gray-900">Settings</h1>
 
       {/* Subscription Card */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
           <h2 className="font-medium text-gray-900">Subscription</h2>
-          {subscription && !subscription.isPremium && (
+          {subscription?.isPremium && (
+            <span className="px-2 py-1 bg-violet-100 text-violet-700 text-xs font-medium rounded-full flex items-center gap-1">
+              <Crown className="w-3 h-3" />
+              Premium
+            </span>
+          )}
+        </div>
+        <div className="p-5">
+          {/* Status display */}
+          {subscription?.isPremium ? (
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 bg-violet-100 rounded-xl flex items-center justify-center">
+                <Crown className="w-6 h-6 text-violet-600" />
+              </div>
+              <div>
+                <p className="font-medium text-gray-900">Premium Plan</p>
+                <p className="text-sm text-gray-500 mt-1">
+                  Unlimited contacts, messages, and all premium features
+                </p>
+              </div>
+            </div>
+          ) : subscription?.isTrialActive ? (
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
+                <Clock className="w-6 h-6 text-blue-600" />
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <p className="font-medium text-gray-900">Trial</p>
+                  <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded-full">
+                    {trialDaysLeft} days left
+                  </span>
+                </div>
+                <p className="text-sm text-gray-500 mt-1">
+                  Full access to all features during your trial
+                </p>
+                {/* Trial progress bar */}
+                <div className="mt-3">
+                  <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-blue-500"
+                      style={{ width: `${Math.max(0, 100 - (trialDaysLeft ?? 0) * (100 / 14))}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center">
+                <Zap className="w-6 h-6 text-gray-600" />
+              </div>
+              <div>
+                <p className="font-medium text-gray-900">Free Plan</p>
+                <p className="text-sm text-gray-500 mt-1">
+                  Limited to {FREE_TIER_LIMITS.max_contacts} contacts and {FREE_TIER_LIMITS.max_messages_per_day} messages/day
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Upgrade CTA */}
+          {!subscription?.isPremium && (
             <button
-              onClick={handleUpgrade}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-bethany-500 text-white text-sm font-medium rounded-lg hover:bg-bethany-600 transition-colors"
+              onClick={() => window.location.href = '/api/subscription/checkout'}
+              className="mt-4 w-full px-4 py-3 bg-gradient-to-r from-bethany-500 to-violet-500 text-white font-medium rounded-lg hover:from-bethany-600 hover:to-violet-600 transition-all flex items-center justify-center gap-2"
             >
               <Sparkles className="w-4 h-4" />
-              Upgrade
+              Upgrade to Premium
             </button>
           )}
         </div>
-        
-        <div className="p-5">
-          {/* Status badge */}
-          <div className="flex items-center gap-3 mb-4">
-            <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-              subInfo.color === 'violet' ? 'bg-violet-100' :
-              subInfo.color === 'bethany' ? 'bg-bethany-100' :
-              'bg-gray-100'
-            }`}>
-              {subInfo.icon && (
-                <subInfo.icon className={`w-6 h-6 ${
-                  subInfo.color === 'violet' ? 'text-violet-600' :
-                  subInfo.color === 'bethany' ? 'text-bethany-600' :
-                  'text-gray-600'
-                }`} />
-              )}
-            </div>
-            <div>
-              <p className="font-semibold text-gray-900">{subInfo.label}</p>
-              <p className="text-sm text-gray-500">{subInfo.description}</p>
-            </div>
-          </div>
-
-          {/* Usage stats for free/trial users */}
-          {subscription && !subscription.isPremium && (
-            <div className="mt-4 pt-4 border-t border-gray-200">
-              <p className="text-sm font-medium text-gray-700 mb-3">Usage limits</p>
-              <div className="grid grid-cols-2 gap-3">
-                <UsageStat
-                  icon={Users}
-                  label="Contacts"
-                  current={contactHealth?.total ?? 0}
-                  max={FREE_TIER_LIMITS.max_contacts}
-                />
-                <UsageStat
-                  icon={MessageSquare}
-                  label="Messages/day"
-                  current={0} // Would come from usage tracking
-                  max={FREE_TIER_LIMITS.max_messages_per_day}
-                />
-                <UsageStat
-                  icon={Brain}
-                  label="Braindumps/day"
-                  current={0}
-                  max={FREE_TIER_LIMITS.max_braindumps_per_day}
-                />
-                <UsageStat
-                  icon={Bell}
-                  label="Nudges/day"
-                  current={0}
-                  max={FREE_TIER_LIMITS.max_nudges_per_day}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Premium benefits */}
-          {subscription?.isPremium && (
-            <div className="mt-4 pt-4 border-t border-gray-200">
-              <div className="flex items-center gap-2 text-sm text-green-600">
-                <Check className="w-4 h-4" />
-                <span>Unlimited contacts</span>
-              </div>
-              <div className="flex items-center gap-2 text-sm text-green-600 mt-1">
-                <Check className="w-4 h-4" />
-                <span>Unlimited messages</span>
-              </div>
-              <div className="flex items-center gap-2 text-sm text-green-600 mt-1">
-                <Check className="w-4 h-4" />
-                <span>Priority support</span>
-              </div>
-            </div>
-          )}
-        </div>
       </div>
+
+      {/* Usage Stats (Free/Trial only) */}
+      {isFreeOrTrial && (
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-200">
+            <h2 className="font-medium text-gray-900">Usage</h2>
+          </div>
+          <div className="p-5 space-y-4">
+            {/* Contacts usage */}
+            <UsageBar
+              icon={<Users className="w-4 h-4" />}
+              label="Contacts"
+              used={usageData.contactsCount}
+              limit={usageData.contactsLimit}
+            />
+            {/* Messages usage */}
+            <UsageBar
+              icon={<MessageSquare className="w-4 h-4" />}
+              label="Messages today"
+              used={usageData.messagesUsedToday}
+              limit={usageData.messagesLimit}
+            />
+            {/* Braindumps usage */}
+            <UsageBar
+              icon={<Brain className="w-4 h-4" />}
+              label="Braindumps today"
+              used={usageData.braindumpsUsedToday}
+              limit={usageData.braindumpsLimit}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Profile Card */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-200">
           <h2 className="font-medium text-gray-900">Profile</h2>
         </div>
-        
         <div className="p-5 space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -325,10 +311,9 @@ export function SettingsPage() {
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full max-w-md px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none"
             />
           </div>
-          
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Email
@@ -337,11 +322,10 @@ export function SettingsPage() {
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              className="w-full max-w-md px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none"
+              placeholder="your@email.com"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none"
             />
           </div>
-          
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Phone
@@ -350,41 +334,44 @@ export function SettingsPage() {
               type="tel"
               value={user?.phone || ''}
               disabled
-              className="w-full max-w-md px-4 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-500"
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-500"
             />
             <p className="text-xs text-gray-500 mt-1">
               Phone number cannot be changed
             </p>
           </div>
 
-          {/* Save button and feedback */}
-          <div className="flex items-center gap-3">
-            <button
-              onClick={handleSaveProfile}
-              disabled={isSavingProfile}
-              className="px-4 py-2 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600 transition-colors disabled:opacity-50 flex items-center gap-2"
+          {profileMessage && (
+            <div
+              className={`p-3 rounded-lg text-sm flex items-center gap-2 ${
+                profileMessage.type === 'success'
+                  ? 'bg-green-50 text-green-700'
+                  : 'bg-red-50 text-red-700'
+              }`}
             >
-              {isSavingProfile ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                'Save changes'
-              )}
-            </button>
-            
-            {profileSuccess && (
-              <span className="text-sm text-green-600 flex items-center gap-1">
+              {profileMessage.type === 'success' ? (
                 <Check className="w-4 h-4" />
-                Saved!
-              </span>
-            )}
-            
-            {profileError && (
-              <span className="text-sm text-red-600 flex items-center gap-1">
+              ) : (
                 <AlertCircle className="w-4 h-4" />
-                {profileError}
-              </span>
+              )}
+              {profileMessage.text}
+            </div>
+          )}
+
+          <button
+            onClick={handleSaveProfile}
+            disabled={isSavingProfile || (!name.trim())}
+            className="px-4 py-2 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+          >
+            {isSavingProfile ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Saving...
+              </>
+            ) : (
+              'Save changes'
             )}
-          </div>
+          </button>
         </div>
       </div>
 
@@ -393,104 +380,20 @@ export function SettingsPage() {
         <div className="px-5 py-4 border-b border-gray-200">
           <h2 className="font-medium text-gray-900">Security</h2>
         </div>
-        
-        <div className="p-5 space-y-4">
-          {/* Change PIN section */}
-          {!showPinChange ? (
-            <button
-              onClick={() => setShowPinChange(true)}
-              className="w-full max-w-md flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
-            >
-              <div className="flex items-center gap-3">
-                <Key className="w-5 h-5 text-gray-400" />
-                <div className="text-left">
-                  <p className="font-medium text-gray-900">Change PIN</p>
-                  <p className="text-sm text-gray-500">Update your 4-digit security PIN</p>
-                </div>
-              </div>
-              <ChevronRight className="w-5 h-5 text-gray-400" />
-            </button>
-          ) : (
-            <div className="max-w-md p-4 border border-gray-200 rounded-lg bg-gray-50">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-medium text-gray-900">Change PIN</h3>
-                <button
-                  onClick={() => {
-                    setShowPinChange(false);
-                    setCurrentPin('');
-                    setNewPin('');
-                    setConfirmPin('');
-                    setPinError(null);
-                  }}
-                  className="p-1 text-gray-400 hover:text-gray-600"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-              
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-sm text-gray-600 mb-1">Current PIN</label>
-                  <input
-                    type="password"
-                    value={currentPin}
-                    onChange={(e) => setCurrentPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                    maxLength={4}
-                    placeholder="••••"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-gray-600 mb-1">New PIN</label>
-                  <input
-                    type="password"
-                    value={newPin}
-                    onChange={(e) => setNewPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                    maxLength={4}
-                    placeholder="••••"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-gray-600 mb-1">Confirm new PIN</label>
-                  <input
-                    type="password"
-                    value={confirmPin}
-                    onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                    maxLength={4}
-                    placeholder="••••"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none"
-                  />
-                </div>
-
-                {pinError && (
-                  <p className="text-sm text-red-600 flex items-center gap-1">
-                    <AlertCircle className="w-4 h-4" />
-                    {pinError}
-                  </p>
-                )}
-
-                <button
-                  onClick={handleChangePin}
-                  disabled={isSavingPin || !currentPin || !newPin || !confirmPin}
-                  className="w-full px-4 py-2 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                  {isSavingPin ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    'Update PIN'
-                  )}
-                </button>
+        <div className="divide-y divide-gray-200">
+          <button
+            onClick={() => setShowPinModal(true)}
+            className="w-full px-5 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors"
+          >
+            <div className="flex items-center gap-3">
+              <Shield className="w-5 h-5 text-gray-400" />
+              <div className="text-left">
+                <p className="font-medium text-gray-900">Change PIN</p>
+                <p className="text-sm text-gray-500">Update your 4-digit login PIN</p>
               </div>
             </div>
-          )}
-
-          {pinSuccess && (
-            <p className="text-sm text-green-600 flex items-center gap-1">
-              <Check className="w-4 h-4" />
-              PIN updated successfully!
-            </p>
-          )}
+            <ChevronRight className="w-5 h-5 text-gray-400" />
+          </button>
         </div>
       </div>
 
@@ -499,76 +402,194 @@ export function SettingsPage() {
         <div className="px-5 py-4 border-b border-gray-200">
           <h2 className="font-medium text-gray-900">Data</h2>
         </div>
-        
         <div className="p-5">
           <button
             onClick={handleExport}
-            className="flex items-center gap-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+            className="px-4 py-2 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2"
           >
-            <Download className="w-5 h-5 text-gray-400" />
-            <div className="text-left">
-              <p className="font-medium text-gray-900">Export contacts</p>
-              <p className="text-sm text-gray-500">Download all your contacts as CSV</p>
-            </div>
+            <Download className="w-4 h-4" />
+            Export all contacts (CSV)
           </button>
+          <p className="text-xs text-gray-500 mt-2">
+            Download a copy of all your contacts and their details
+          </p>
         </div>
       </div>
 
-      {/* Logout Card */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="p-5">
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-3 p-3 border border-red-200 rounded-lg hover:bg-red-50 transition-colors text-red-600 w-full max-w-md"
-          >
+      {/* Logout */}
+      <button
+        onClick={handleLogout}
+        disabled={isLoggingOut}
+        className="w-full px-5 py-4 bg-white rounded-xl border border-gray-200 flex items-center justify-center gap-2 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+      >
+        {isLoggingOut ? (
+          <>
+            <Loader2 className="w-5 h-5 animate-spin" />
+            Logging out...
+          </>
+        ) : (
+          <>
             <LogOut className="w-5 h-5" />
-            <div className="text-left">
-              <p className="font-medium">Log out</p>
-              <p className="text-sm text-red-500">Sign out of your account on this device</p>
+            Log out
+          </>
+        )}
+      </button>
+
+      {/* PIN Change Modal */}
+      {showPinModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl w-full max-w-md">
+            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+              <h2 className="font-medium text-gray-900">Change PIN</h2>
+              <button
+                onClick={() => {
+                  setShowPinModal(false);
+                  setCurrentPin('');
+                  setNewPin('');
+                  setConfirmPin('');
+                  setPinMessage(null);
+                }}
+                className="p-1 text-gray-400 hover:text-gray-600"
+              >
+                ×
+              </button>
             </div>
-          </button>
+            <div className="p-5 space-y-4">
+              {/* Current PIN */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Current PIN
+                </label>
+                <div className="relative">
+                  <input
+                    type={showCurrentPin ? 'text' : 'password'}
+                    value={currentPin}
+                    onChange={(e) => setCurrentPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                    placeholder="••••"
+                    maxLength={4}
+                    className="w-full px-4 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none font-mono text-lg tracking-widest"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowCurrentPin(!showCurrentPin)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >
+                    {showCurrentPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* New PIN */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  New PIN
+                </label>
+                <div className="relative">
+                  <input
+                    type={showNewPin ? 'text' : 'password'}
+                    value={newPin}
+                    onChange={(e) => setNewPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                    placeholder="••••"
+                    maxLength={4}
+                    className="w-full px-4 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none font-mono text-lg tracking-widest"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPin(!showNewPin)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >
+                    {showNewPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Confirm PIN */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Confirm new PIN
+                </label>
+                <input
+                  type="password"
+                  value={confirmPin}
+                  onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                  placeholder="••••"
+                  maxLength={4}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none font-mono text-lg tracking-widest"
+                />
+              </div>
+
+              {pinMessage && (
+                <div
+                  className={`p-3 rounded-lg text-sm flex items-center gap-2 ${
+                    pinMessage.type === 'success'
+                      ? 'bg-green-50 text-green-700'
+                      : 'bg-red-50 text-red-700'
+                  }`}
+                >
+                  {pinMessage.type === 'success' ? (
+                    <Check className="w-4 h-4" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4" />
+                  )}
+                  {pinMessage.text}
+                </div>
+              )}
+
+              <button
+                onClick={handleChangePin}
+                disabled={isChangingPin || currentPin.length !== 4 || newPin.length !== 4 || confirmPin.length !== 4}
+                className="w-full px-4 py-2 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {isChangingPin ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Changing...
+                  </>
+                ) : (
+                  'Change PIN'
+                )}
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
 
 // ===========================================================================
-// Usage Stat Component
+// Usage Bar Component
 // ===========================================================================
 
-function UsageStat({
-  icon: Icon,
+function UsageBar({
+  icon,
   label,
-  current,
-  max,
+  used,
+  limit,
 }: {
-  icon: React.ComponentType<{ className?: string }>;
+  icon: React.ReactNode;
   label: string;
-  current: number;
-  max: number;
+  used: number;
+  limit: number;
 }) {
-  const percentage = Math.min((current / max) * 100, 100);
+  const percentage = Math.min(100, (used / limit) * 100);
   const isNearLimit = percentage >= 80;
   const isAtLimit = percentage >= 100;
 
   return (
-    <div className="p-3 bg-gray-50 rounded-lg">
-      <div className="flex items-center gap-2 mb-2">
-        <Icon className="w-4 h-4 text-gray-400" />
-        <span className="text-sm text-gray-600">{label}</span>
-      </div>
+    <div>
       <div className="flex items-center justify-between mb-1">
-        <span className={`text-lg font-semibold ${
-          isAtLimit ? 'text-red-600' : isNearLimit ? 'text-yellow-600' : 'text-gray-900'
-        }`}>
-          {current}
+        <div className="flex items-center gap-2 text-sm text-gray-600">
+          {icon}
+          {label}
+        </div>
+        <span className={`text-sm font-medium ${isAtLimit ? 'text-red-600' : isNearLimit ? 'text-yellow-600' : 'text-gray-900'}`}>
+          {used} / {limit}
         </span>
-        <span className="text-sm text-gray-400">/ {max}</span>
       </div>
-      <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+      <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
         <div
-          className={`h-full rounded-full transition-all ${
+          className={`h-full transition-all ${
             isAtLimit ? 'bg-red-500' : isNearLimit ? 'bg-yellow-500' : 'bg-bethany-500'
           }`}
           style={{ width: `${percentage}%` }}
