@@ -39,10 +39,21 @@
  *   Dunbar layer. This is the core differentiator from every competitor
  *   (Clay, Dex, UpHabit) — none implement cross-layer comparison.
  *
- * Health thresholds:
- *   green  = within cadence window
- *   yellow = 1.0x–1.5x cadence elapsed (slipping)
- *   red    = >1.5x cadence elapsed (overdue)
+ * Health thresholds (per-layer, from research doc Section 6):
+ *   green  = within cadence window (ratio < yellowThreshold)
+ *   yellow = slipping — ratio at or above yellowThreshold
+ *   red    = overdue — ratio at or above redThreshold
+ *
+ *   Per-layer values (derived from DUNBAR_LAYERS tolerance/urgency windows):
+ *     inner_circle:  yellow 1.43x (10d), red 2.0x (14d)
+ *     nurture:       yellow 1.43x (20d), red 2.0x (28d)
+ *     maintain:      yellow 1.5x  (45d), red 2.0x (60d)
+ *     transactional: yellow 1.33x (120d), red 2.0x (180d)
+ *
+ *   Inner layers get tighter feedback loops; outer layers get breathing
+ *   room. Red threshold is a uniform 2.0x across all layers — "double
+ *   your cadence = overdue" universally.
+ *
  *   (kin contacts: thresholds multiplied by 1 + kinDecayModifier)
  *   (new contacts in establishment window: cadence *= newRelationshipCadenceMultiplier)
  *
@@ -72,9 +83,24 @@ export interface IntentConfig {
   description: string;
   /** Default cadence in days (null = no active cadence) */
   defaultCadenceDays: number | null;
-  /** Fraction of cadence elapsed before yellow status (1.0 = at cadence) */
+  /**
+   * Fraction of cadence elapsed before yellow status.
+   * Per-layer values derived from research doc Section 6 tolerance windows:
+   *   inner_circle: 1.43 (10d tolerance / 7d cadence)
+   *   nurture:      1.43 (interpolated — close relationships, tight windows)
+   *   maintain:     1.5  (45d tolerance / 30d cadence)
+   *   transactional: 1.33 (120d tolerance / 90d cadence)
+   */
   yellowThreshold: number;
-  /** Fraction of cadence elapsed before red status */
+  /**
+   * Fraction of cadence elapsed before red status.
+   * Uniform 2.0x across all active layers — "double your cadence = overdue."
+   * Derived from research doc Section 6 urgency windows:
+   *   inner_circle: 2.0 (14d urgency / 7d cadence)
+   *   nurture:      2.0 (28d / 14d)
+   *   maintain:     2.0 (60d / 30d)
+   *   transactional: 2.0 (180d / 90d)
+   */
   redThreshold: number;
   /**
    * Kin decay modifier — relaxes thresholds for family/kin contacts.
@@ -222,8 +248,10 @@ export const INTENT_CONFIGS: Record<IntentType, IntentConfig> = {
     dunbarSize: 5,
     description: 'Your closest people — the ones you turn to first. Weekly contact keeps these bonds strong.',
     defaultCadenceDays: 7,
-    yellowThreshold: 1.0,
-    redThreshold: 1.5,
+    // Research: 10d tolerance / 7d cadence = 1.43x, 14d urgency / 7d = 2.0x
+    // Feel: ~3 day grace period, urgent at 2 weeks
+    yellowThreshold: 1.43,
+    redThreshold: 2.0,
     kinDecayModifier: 0.5,
     nudgeTemplates: [
       {
@@ -240,7 +268,7 @@ export const INTENT_CONFIGS: Record<IntentType, IntentConfig> = {
       },
       {
         trigger: 'red',
-        message: "{{name}} hasn't heard from you in over 10 days. For someone in your inner circle, that's a gap worth closing. Even \"hey, been thinking about you\" works.",
+        message: "{{name}} hasn't heard from you in over two weeks. For someone in your inner circle, that's a gap worth closing. Even \"hey, been thinking about you\" works.",
       },
     ],
   },
@@ -252,8 +280,10 @@ export const INTENT_CONFIGS: Record<IntentType, IntentConfig> = {
     dunbarSize: 15,
     description: 'Relationships you\'re actively investing in. Regular contact every couple weeks keeps the momentum going.',
     defaultCadenceDays: 14,
-    yellowThreshold: 1.0,
-    redThreshold: 1.5,
+    // Interpolated from inner_circle and maintain — close relationships, tight windows
+    // Feel: ~6 day grace period, urgent at 4 weeks
+    yellowThreshold: 1.43,
+    redThreshold: 2.0,
     kinDecayModifier: 0.5,
     nudgeTemplates: [
       {
@@ -266,7 +296,7 @@ export const INTENT_CONFIGS: Record<IntentType, IntentConfig> = {
       },
       {
         trigger: 'red',
-        message: "It's been over three weeks since you reached out to {{name}}. Nurture relationships need regular watering — want to reconnect?",
+        message: "It's been close to a month since you reached out to {{name}}. Nurture relationships need regular watering — want to reconnect?",
       },
       {
         trigger: 'red',
@@ -282,8 +312,10 @@ export const INTENT_CONFIGS: Record<IntentType, IntentConfig> = {
     dunbarSize: 50,
     description: 'Stable relationships that stay warm with monthly check-ins. You don\'t need to force it — just stay present.',
     defaultCadenceDays: 30,
-    yellowThreshold: 1.0,
-    redThreshold: 1.5,
+    // Research: 45d tolerance / 30d cadence = 1.5x, 60d urgency / 30d = 2.0x
+    // Feel: ~2 week grace period, urgent at 2 months
+    yellowThreshold: 1.5,
+    redThreshold: 2.0,
     kinDecayModifier: 0.3,
     nudgeTemplates: [
       {
@@ -296,7 +328,7 @@ export const INTENT_CONFIGS: Record<IntentType, IntentConfig> = {
       },
       {
         trigger: 'red',
-        message: "It's been over 6 weeks since you connected with {{name}}. Maintain relationships can fade quietly — want to send a quick note?",
+        message: "It's been about two months since you connected with {{name}}. Maintain relationships can fade quietly — want to send a quick note?",
       },
       {
         trigger: 'red',
@@ -312,8 +344,10 @@ export const INTENT_CONFIGS: Record<IntentType, IntentConfig> = {
     dunbarSize: 150,
     description: 'Purpose-driven connections — you reach out when there\'s a reason. Quarterly is a reasonable rhythm.',
     defaultCadenceDays: 90,
-    yellowThreshold: 1.0,
-    redThreshold: 1.5,
+    // Research: 120d tolerance / 90d cadence = 1.33x, 180d urgency / 90d = 2.0x
+    // Feel: ~1 month grace period, urgent at 6 months
+    yellowThreshold: 1.33,
+    redThreshold: 2.0,
     kinDecayModifier: 0.2,
     nudgeTemplates: [
       {
@@ -501,6 +535,11 @@ export function resolveEffectiveCadence(
  * Calculate the health status of a contact based on their intent and
  * when they were last contacted.
  *
+ * Uses per-layer thresholds derived from Dunbar research tolerance and
+ * urgency windows (see INTENT_CONFIGS for specific values per layer).
+ * Inner layers have tighter feedback loops; outer layers get more
+ * breathing room. Red is uniformly 2.0x across all active layers.
+ *
  * @param intent            - The contact's intent type
  * @param lastContact       - ISO timestamp of the last interaction, or null
  * @param customCadenceDays - Optional override of the intent's default cadence
@@ -516,7 +555,7 @@ export function resolveEffectiveCadence(
  *   - dormant contacts (and new contacts outside establishment) with no
  *     cadence are always 'green'
  *   - contacts with no lastContact date are 'yellow' (unknown state)
- *   - otherwise: days_elapsed / effectiveCadence compared against thresholds
+ *   - otherwise: days_elapsed / effectiveCadence compared against per-layer thresholds
  *   - kin contacts: thresholds *= (1 + kinDecayModifier)
  *   - new relationships in establishment window: cadence is tightened
  */
