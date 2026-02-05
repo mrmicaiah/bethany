@@ -8,6 +8,7 @@
  * Cron schedule (all times UTC):
  *
  *   0 9 * * *    → dailyNudgeGeneration (3am Central) — premium users
+ *   0 9 * * *    → dailyTrialReminders (3am Central) — trial messaging
  *   0 9 * * 1    → weeklyNudgeGeneration (Monday 3am Central) — free users
  *   0 10 * * 1   → weeklySortingCheckin (Monday 4am Central) — sorting offers
  *   0 14 * * *   → nudgeDelivery (8am Central) — send pending nudges
@@ -26,6 +27,7 @@
  * @see worker/services/contact-service.ts for recalculateAllHealthStatuses()
  * @see worker/services/nudge-service.ts for nudge generation and delivery
  * @see worker/services/sorting-checkin-service.ts for weekly sorting offers
+ * @see worker/services/trial-messaging-service.ts for trial lifecycle messaging
  */
 
 import type { Env } from '../../shared/types';
@@ -38,6 +40,7 @@ import {
   markNudgeDelivered,
 } from '../services/nudge-service';
 import { generateSortingCheckins } from '../services/sorting-checkin-service';
+import { processTrialReminders, sendTrialExpiredNotification } from '../services/trial-messaging-service';
 
 // ===========================================================================
 // Types
@@ -79,9 +82,10 @@ export async function handleScheduled(
 
   console.log(`[cron] Triggered: ${trigger} at ${new Date().toISOString()}`);
 
-  // ─── 9am UTC daily (3am Central) — Premium nudge generation ───
+  // ─── 9am UTC daily (3am Central) — Premium nudge generation + trial reminders ───
   if (trigger === '0 9 * * *') {
     results.push(await runJob('dailyNudgeGeneration', () => dailyNudgeGeneration(env)));
+    results.push(await runJob('dailyTrialReminders', () => dailyTrialReminders(env)));
   }
 
   // ─── 9am UTC Monday (3am Central Monday) — Free tier weekly nudges ───
@@ -267,6 +271,34 @@ async function weeklyNudgeGeneration(env: Env): Promise<Record<string, unknown>>
 }
 
 /**
+ * Daily trial reminders for users approaching trial end.
+ *
+ * Runs at 3am Central daily. Checks trial users and sends appropriate
+ * lifecycle messages based on where they are in their trial:
+ *
+ *   - Day 10-12 + high engagement: Usage highlight ("You're getting good use...")
+ *   - Day 12-13: Upgrade prompt with personalized stats
+ *
+ * Messages are personalized based on actual usage (contacts added,
+ * people reconnected, etc.). Each stage is only sent once per user.
+ *
+ * Note: Signup welcome and expiration notices are sent synchronously
+ * from signup-service.ts and subscription-service.ts respectively.
+ */
+async function dailyTrialReminders(env: Env): Promise<Record<string, unknown>> {
+  const result = await processTrialReminders(env.DB, env);
+
+  return {
+    usersChecked: result.usersChecked,
+    usageHighlightsSent: result.usageHighlightsSent,
+    upgradePromptsSent: result.upgradePromptsSent,
+    skippedAlreadySent: result.skippedAlreadySent,
+    skippedLowUsage: result.skippedLowUsage,
+    errors: result.errors,
+  };
+}
+
+/**
  * Weekly sorting check-in for all users with unsorted contacts.
  *
  * Runs Monday 4am Central (1 hour after nudge generation so messages
@@ -353,11 +385,46 @@ async function nudgeDelivery(env: Env): Promise<Record<string, unknown>> {
  * Check for expired trials and downgrade to free tier.
  *
  * Runs at midnight UTC daily. This catches users whose trial expired
- * but haven't made any requests (so lazy downgrade hasn't triggered).
+ * but haven't made any requests (so lazy downgrade hasn't fired).
+ *
+ * Also sends trial expiration notifications to each downgraded user
+ * so they know their status has changed.
  */
 async function trialExpirationCheck(env: Env): Promise<Record<string, unknown>> {
-  const result = await processExpiredTrials(env.DB);
-  return { usersDowngraded: result.downgraded };
+  const db = env.DB;
+
+  // First, get the list of users who will be downgraded
+  const { results: expiringUsers } = await db
+    .prepare(
+      `SELECT id FROM users
+       WHERE subscription_tier = 'trial'
+         AND trial_ends_at IS NOT NULL
+         AND trial_ends_at < datetime('now')`
+    )
+    .all<{ id: string }>();
+
+  // Process the downgrades
+  const result = await processExpiredTrials(db);
+
+  // Send expiration notifications to each downgraded user
+  let notificationsSent = 0;
+  let notificationErrors = 0;
+
+  for (const user of expiringUsers) {
+    try {
+      await sendTrialExpiredNotification(db, env, user.id);
+      notificationsSent++;
+    } catch (err) {
+      console.error(`[cron:trialExpiration] Failed to notify user ${user.id}:`, err);
+      notificationErrors++;
+    }
+  }
+
+  return {
+    usersDowngraded: result.downgraded,
+    notificationsSent,
+    notificationErrors,
+  };
 }
 
 /**
