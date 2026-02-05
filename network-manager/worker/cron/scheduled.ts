@@ -23,11 +23,18 @@
  * @see wrangler.toml [triggers] for cron expressions
  * @see worker/services/subscription-service.ts for processExpiredTrials()
  * @see worker/services/contact-service.ts for recalculateAllHealthStatuses()
+ * @see worker/services/nudge-service.ts for nudge generation and delivery
  */
 
 import type { Env } from '../../shared/types';
 import { processExpiredTrials, purgeOldUsageData } from '../services/subscription-service';
 import { recalculateAllHealthStatuses } from '../services/contact-service';
+import {
+  generateNudgesForUser,
+  getPendingNudges,
+  sendNudge,
+  markNudgeDelivered,
+} from '../services/nudge-service';
 
 // ===========================================================================
 // Types
@@ -149,30 +156,40 @@ async function runJob(
  *
  * Runs at 3am Central so nudges are ready for the 8am delivery window.
  * Only processes premium and active trial users — they get daily nudges.
+ *
+ * Smart grouping limits:
+ *   - Maximum 5 nudges per user per day
+ *   - Prioritized by urgency (red health > yellow, inner circle > outer)
+ *   - Respects 48-hour cooldown per contact
  */
 async function dailyNudgeGeneration(env: Env): Promise<Record<string, unknown>> {
   const db = env.DB;
 
-  // Get all premium/trial users with at least one contact
+  // Get all premium/trial users with at least one active contact
   const { results: users } = await db
     .prepare(
       `SELECT DISTINCT u.id, u.name
        FROM users u
        INNER JOIN contacts c ON u.id = c.user_id
        WHERE u.subscription_tier IN ('premium', 'trial')
-         AND c.archived = 0`
+         AND c.archived = 0
+         AND c.intent NOT IN ('dormant', 'new')`
     )
     .all<{ id: string; name: string }>();
 
   let nudgesGenerated = 0;
   let usersProcessed = 0;
+  let usersSkipped = 0;
 
   for (const user of users) {
     try {
-      // TODO: TASK — Call nudge generation service
-      // const generated = await generateNudgesForUser(db, env, user.id);
-      // nudgesGenerated += generated;
+      const result = await generateNudgesForUser(db, env, user.id, { weekly: false });
+      nudgesGenerated += result.nudgesCreated;
       usersProcessed++;
+
+      if (result.nudgesCreated === 0) {
+        usersSkipped++;
+      }
     } catch (err) {
       console.error(`[cron:dailyNudge] Failed for user ${user.id}:`, err);
     }
@@ -180,6 +197,7 @@ async function dailyNudgeGeneration(env: Env): Promise<Record<string, unknown>> 
 
   return {
     usersProcessed,
+    usersSkipped,
     nudgesGenerated,
     tier: 'premium/trial',
   };
@@ -188,32 +206,45 @@ async function dailyNudgeGeneration(env: Env): Promise<Record<string, unknown>> 
 /**
  * Weekly nudge generation for free tier users.
  *
- * Runs Monday 3am Central. Free users get a single weekly batch of
- * nudges (up to their FREE_TIER_LIMITS.max_nudges_per_day).
+ * Runs Monday 3am Central. Free users get a single weekly digest message
+ * listing up to 3 contacts needing attention. This provides value while
+ * encouraging upgrade for daily, personalized nudges.
+ *
+ * Digest format:
+ *   🌟 Weekly Check-in Reminder
+ *   Here are 3 people who'd love to hear from you:
+ *   1. Mom
+ *   2. Sarah Chen
+ *   3. Mike Johnson
  */
 async function weeklyNudgeGeneration(env: Env): Promise<Record<string, unknown>> {
   const db = env.DB;
 
-  // Get all free tier users with at least one contact
+  // Get all free tier users with at least one active contact
   const { results: users } = await db
     .prepare(
       `SELECT DISTINCT u.id, u.name
        FROM users u
        INNER JOIN contacts c ON u.id = c.user_id
        WHERE u.subscription_tier = 'free'
-         AND c.archived = 0`
+         AND c.archived = 0
+         AND c.intent NOT IN ('dormant', 'new')`
     )
     .all<{ id: string; name: string }>();
 
   let nudgesGenerated = 0;
   let usersProcessed = 0;
+  let usersSkipped = 0;
 
   for (const user of users) {
     try {
-      // TODO: TASK — Call nudge generation service with weekly flag
-      // const generated = await generateNudgesForUser(db, env, user.id, { weekly: true });
-      // nudgesGenerated += generated;
+      const result = await generateNudgesForUser(db, env, user.id, { weekly: true });
+      nudgesGenerated += result.nudgesCreated;
       usersProcessed++;
+
+      if (result.nudgesCreated === 0) {
+        usersSkipped++;
+      }
     } catch (err) {
       console.error(`[cron:weeklyNudge] Failed for user ${user.id}:`, err);
     }
@@ -221,6 +252,7 @@ async function weeklyNudgeGeneration(env: Env): Promise<Record<string, unknown>>
 
   return {
     usersProcessed,
+    usersSkipped,
     nudgesGenerated,
     tier: 'free',
   };
@@ -229,45 +261,42 @@ async function weeklyNudgeGeneration(env: Env): Promise<Record<string, unknown>>
 /**
  * Deliver pending nudges via SMS.
  *
- * Runs at 8am Central — the "morning coffee" delivery window.
- * Fetches all nudges with status='pending' and scheduled_for <= now,
- * sends them via SendBlue, and marks them delivered.
+ * Runs at 8am Central — the "morning coffee" delivery window when
+ * users are most likely to see and act on reminders.
+ *
+ * Process:
+ *   1. Fetch all nudges with status='pending' and scheduled_for <= now
+ *   2. For each nudge, send via SendBlue
+ *   3. Mark as 'delivered' on success
+ *   4. Leave as 'pending' on failure (will retry next run)
+ *
+ * Rate limiting:
+ *   - Processes up to 100 nudges per run
+ *   - SendBlue handles rate limiting on their end
+ *   - Failed sends are retried on the next cron run
  */
 async function nudgeDelivery(env: Env): Promise<Record<string, unknown>> {
   const db = env.DB;
-  const now = new Date().toISOString();
 
-  // Get pending nudges that are ready to send
-  const { results: nudges } = await db
-    .prepare(
-      `SELECT n.id, n.user_id, n.contact_id, n.message, u.phone
-       FROM nudges n
-       INNER JOIN users u ON n.user_id = u.id
-       WHERE n.status = 'pending'
-         AND n.scheduled_for <= ?
-       ORDER BY n.scheduled_for ASC
-       LIMIT 100`
-    )
-    .bind(now)
-    .all<{
-      id: string;
-      user_id: string;
-      contact_id: string;
-      message: string;
-      phone: string;
-    }>();
+  // Get pending nudges ready to send
+  const nudges = await getPendingNudges(db, 100);
 
   let delivered = 0;
   let failed = 0;
 
   for (const nudge of nudges) {
     try {
-      // TODO: TASK — Send via SendBlue and mark delivered
-      // await sendNudge(env, nudge);
-      // await markNudgeDelivered(db, nudge.id);
-      delivered++;
+      const result = await sendNudge(env, nudge);
+
+      if (result.success) {
+        await markNudgeDelivered(db, nudge.id);
+        delivered++;
+      } else {
+        console.error(`[cron:nudgeDelivery] Send failed for nudge ${nudge.id}:`, result.error);
+        failed++;
+      }
     } catch (err) {
-      console.error(`[cron:nudgeDelivery] Failed for nudge ${nudge.id}:`, err);
+      console.error(`[cron:nudgeDelivery] Exception for nudge ${nudge.id}:`, err);
       failed++;
     }
   }
