@@ -9,10 +9,19 @@ binding = "DB"
 database_name = "bethany-network-db"
 # database_id = "" # Set after: wrangler d1 create bethany-network-db
 
-# R2 for bulk imports, exports, and backups
+# R2 for bulk imports, exports, backups
 [[r2_buckets]]
 binding = "STORAGE"
 bucket_name = "bethany-network-storage"
+
+# Durable Objects — onboarding conversation state
+[[durable_objects.bindings]]
+name = "ONBOARDING_DO"
+class_name = "OnboardingDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["OnboardingDO"]
 
 # Cron triggers for nudge generation and health checks
 [triggers]
@@ -29,7 +38,7 @@ BETHANY_WORKER_URL = "https://bethany.mrmicaiah.workers.dev"
 MAX_FREE_CONTACTS = 15
 TRIAL_DAYS = 14
 
-# Secrets (set via `wrangler secret put <NAME>`):
+# Secrets (set via `wrangler secret put <n>`):
 # ANTHROPIC_API_KEY      — Claude API for braindump parsing, nudge generation
 # SENDBLUE_API_KEY       — SMS delivery
 # SENDBLUE_API_SECRET    — SMS delivery
