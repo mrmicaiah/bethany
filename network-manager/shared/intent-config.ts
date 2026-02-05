@@ -32,6 +32,27 @@
  *   ~10 days for new contacts. After the establishment window passes,
  *   normal intent cadence takes over.
  *
+ * Gender-Aware Maintenance (opt-in):
+ *   Roberts & Dunbar (2011, 2015) found gender differences in how
+ *   relationships are maintained:
+ *     - Women maintain closeness primarily through conversation frequency.
+ *       More frequent check-ins preserve emotional depth.
+ *     - Men maintain closeness primarily through shared activities.
+ *       Doing things together matters more than talk frequency.
+ *     - Women tend to have slightly larger, more emotionally dense
+ *       sympathy groups (Layer 2).
+ *     - Men tend to have larger but less intimate outer layers.
+ *
+ *   These are soft defaults applied when the user opts in by setting
+ *   their gender during onboarding or settings. They affect:
+ *     1. Cadence multipliers (women get slightly tighter inner-layer
+ *        cadence, men get slightly relaxed inner cadence)
+ *     2. Nudge style preferences (conversation-first vs. activity-first)
+ *
+ *   The modifiers are intentionally subtle — 10-15% adjustments, not
+ *   dramatic differences. They function as calibration, not stereotyping.
+ *   Any user can override with custom cadence per contact.
+ *
  * Drift Detection:
  *   Health status measures a contact against their OWN cadence.
  *   Drift detection compares actual interaction frequency against ALL
@@ -56,15 +77,17 @@
  *
  *   (kin contacts: thresholds multiplied by 1 + kinDecayModifier)
  *   (new contacts in establishment window: cadence *= newRelationshipCadenceMultiplier)
+ *   (gender modifiers: cadence *= genderCadenceMultiplier when user opts in)
  *
- * @see shared/models.ts for IntentType, HealthStatus, ContactKind, DriftAlert
+ * @see shared/models.ts for IntentType, HealthStatus, ContactKind, UserGender, DriftAlert
  * @see Roberts & Dunbar (2011). The costs of family and friends.
  * @see Roberts & Dunbar (2015). Managing relationship decay.
  * @see PLOS ONE (2025). Reflecting on Dunbar's numbers (N=906).
- * @see dunbar-cadence-research-findings.md, Section 6 (DECAY_CONFIG).
+ * @see dunbar-cadence-research-findings.md, Section 4 (Gender patterns),
+ *      Section 6 (DECAY_CONFIG).
  */
 
-import type { IntentType, HealthStatus, DriftSeverity, DriftAlert, DriftEvidence } from './models';
+import type { IntentType, HealthStatus, DriftSeverity, DriftAlert, DriftEvidence, UserGender } from './models';
 
 // ===========================================================================
 // Intent Configuration
@@ -186,6 +209,234 @@ export const NEW_RELATIONSHIP_CONFIG = {
    */
   fallbackCadenceDays: 14,
 } as const;
+
+// ===========================================================================
+// Gender-Aware Maintenance Configuration
+// ===========================================================================
+
+/**
+ * Nudge style — how Bethany frames the reconnection suggestion.
+ *
+ * Research basis (Roberts & Dunbar 2011, 2015):
+ *   - Women maintain relationships primarily through conversation —
+ *     talking, texting, emotional check-ins.
+ *   - Men maintain relationships primarily through shared activities —
+ *     doing things together, side-by-side experiences.
+ *
+ * These styles affect which nudge templates Bethany prefers, not which
+ * ones she's limited to. A 'conversation' preference means Bethany
+ * leads with conversation-based nudges but can still suggest activities.
+ */
+export type NudgeStyle = 'conversation' | 'activity' | 'balanced';
+
+/**
+ * Gender-specific maintenance modifiers.
+ *
+ * These are SOFT DEFAULTS — they adjust Bethany's behavior when the
+ * user has opted in by setting their gender. Think of them like the
+ * kin decay modifier: research-backed calibration that improves the
+ * experience for most people, but never a hard rule.
+ *
+ * How they stack with other modifiers:
+ *   1. Base cadence from intent config
+ *   2. × new relationship multiplier (if in establishment window)
+ *   3. × gender cadence multiplier (if gender is set)
+ *   4. Custom cadence override trumps everything
+ *
+ *   Kin modifier applies to THRESHOLDS (independent axis).
+ *   Gender modifier applies to CADENCE (same axis as new relationship).
+ *
+ * The values are intentionally subtle. A 10-15% shift is enough to
+ * make Bethany feel calibrated without being heavy-handed.
+ */
+export interface GenderModifiers {
+  /** Multiplier applied to cadence. <1 = tighter (more frequent), >1 = relaxed */
+  cadenceMultiplier: Record<IntentType, number>;
+  /** Preferred nudge style — affects template selection, not hard filtering */
+  preferredNudgeStyle: NudgeStyle;
+  /**
+   * Style weight — how strongly to prefer the nudge style (0.0–1.0).
+   * 0.5 = balanced (no preference). 0.7 = moderate preference.
+   * 0.9 = strong preference (still occasionally uses other styles).
+   *
+   * Implementation: when picking a nudge template, this is the
+   * probability of selecting from the preferred style pool vs. the
+   * general pool. At 0.7, ~70% of nudges use the preferred style.
+   */
+  styleWeight: number;
+  /** Research note — for documentation and dashboard tooltips */
+  researchNote: string;
+}
+
+/**
+ * Gender-aware nudge templates — activity-focused and conversation-focused
+ * variants of standard nudge messages.
+ *
+ * These supplement (not replace) the base nudge templates in INTENT_CONFIGS.
+ * When a user has a gender set and a preferred nudge style, Bethany draws
+ * from these pools based on the styleWeight probability.
+ *
+ * Keyed by intent type, then by nudge style, then by trigger.
+ */
+export interface StyledNudgeTemplate extends NudgeTemplate {
+  /** The nudge style this template belongs to */
+  style: NudgeStyle;
+}
+
+/**
+ * Gender modifiers per gender.
+ *
+ * null gender = no modifiers applied (system default behavior).
+ *
+ * Research basis (Roberts & Dunbar 2011, 2015 — Section 4):
+ *   - Women: conversation frequency is the primary maintenance mechanism.
+ *     Slightly tighter cadence on inner layers (where emotional closeness
+ *     matters most). Conversation-first nudge style.
+ *   - Men: shared activities are the primary maintenance mechanism.
+ *     Slightly relaxed cadence on inner layers (closeness maintained
+ *     through less frequent but more activity-based interactions).
+ *     Activity-first nudge style.
+ *
+ * Values are intentionally conservative:
+ *   - Inner layers get the most adjustment (where gender differences
+ *     are most pronounced in the research)
+ *   - Outer layers get minimal adjustment (transactional relationships
+ *     don't vary much by gender)
+ *   - No adjustment on dormant/new (no active cadence to modify)
+ */
+export const GENDER_MODIFIERS: Record<NonNullable<UserGender>, GenderModifiers> = {
+  female: {
+    cadenceMultiplier: {
+      inner_circle: 0.90,    // 10% tighter — conversation frequency matters most here
+      nurture: 0.93,         // 7% tighter — still significant for sympathy group
+      maintain: 0.97,        // 3% tighter — minimal effect on outer layers
+      transactional: 1.0,    // No change — purpose-driven contacts are gender-neutral
+      dormant: 1.0,          // No effect
+      new: 1.0,              // No effect (establishment multiplier handles new contacts)
+    },
+    preferredNudgeStyle: 'conversation',
+    styleWeight: 0.7,        // 70% conversation-first nudges, 30% general/activity
+    researchNote: 'Roberts & Dunbar (2011, 2015): Women maintain closeness primarily through conversation frequency. Tighter cadence on inner layers reflects higher sensitivity to contact gaps.',
+  },
+  male: {
+    cadenceMultiplier: {
+      inner_circle: 1.10,    // 10% relaxed — closeness maintained through activities, not frequency
+      nurture: 1.07,         // 7% relaxed — still benefits from regular contact
+      maintain: 1.03,        // 3% relaxed — minimal effect
+      transactional: 1.0,    // No change
+      dormant: 1.0,          // No effect
+      new: 1.0,              // No effect
+    },
+    preferredNudgeStyle: 'activity',
+    styleWeight: 0.7,        // 70% activity-first nudges, 30% general/conversation
+    researchNote: 'Roberts & Dunbar (2011, 2015): Men maintain closeness primarily through shared activities. Relaxed cadence on inner layers reflects lower sensitivity to conversation frequency gaps.',
+  },
+};
+
+/**
+ * Styled nudge templates — conversation-focused and activity-focused variants.
+ *
+ * These are organized by intent type so Bethany can select the right
+ * pool based on the contact's layer AND the user's preferred style.
+ *
+ * The templates are designed to feel natural regardless of gender —
+ * a man getting a conversation nudge or a woman getting an activity
+ * nudge should both feel like good advice, just not the default.
+ */
+export const STYLED_NUDGE_TEMPLATES: Record<IntentType, StyledNudgeTemplate[]> = {
+  inner_circle: [
+    // Conversation-focused
+    {
+      style: 'conversation',
+      trigger: 'yellow',
+      message: "It's been a bit since you and {{name}} really talked. A quick call or voice note could mean a lot — your inner circle thrives on staying connected.",
+    },
+    {
+      style: 'conversation',
+      trigger: 'red',
+      message: "{{name}} is one of your closest people and it's been too long since you connected. Even a \"hey, I miss talking to you\" text carries weight.",
+    },
+    // Activity-focused
+    {
+      style: 'activity',
+      trigger: 'yellow',
+      message: "When's the last time you and {{name}} actually did something together? Grab lunch, go for a walk, play a game — your inner circle stays strong through shared time.",
+    },
+    {
+      style: 'activity',
+      trigger: 'red',
+      message: "You and {{name}} haven't hung out in a while. For your closest people, doing something together — even something low-key — keeps the bond tight. Worth planning something?",
+    },
+  ],
+
+  nurture: [
+    // Conversation-focused
+    {
+      style: 'conversation',
+      trigger: 'yellow',
+      message: "{{name}} hasn't heard from you in a couple weeks. A genuine \"how are you doing?\" keeps nurture relationships deepening.",
+    },
+    {
+      style: 'conversation',
+      trigger: 'red',
+      message: "It's been nearly a month since you checked in with {{name}}. Relationships you're growing need regular conversation — want to send a quick message?",
+    },
+    // Activity-focused
+    {
+      style: 'activity',
+      trigger: 'yellow',
+      message: "{{name}} might be up for hanging out — you haven't seen each other in a couple weeks. Invite them to something you're already doing?",
+    },
+    {
+      style: 'activity',
+      trigger: 'red',
+      message: "You and {{name}} are overdue for some time together. Nurture relationships grow through shared experiences — got anything coming up you could invite them to?",
+    },
+  ],
+
+  maintain: [
+    // Conversation-focused
+    {
+      style: 'conversation',
+      trigger: 'yellow',
+      message: "A month since you connected with {{name}} — a quick \"saw this and thought of you\" keeps the thread alive.",
+    },
+    {
+      style: 'conversation',
+      trigger: 'red',
+      message: "{{name}} hasn't heard from you in a while. Even a short message — an article, a memory, a question — prevents this one from going quiet.",
+    },
+    // Activity-focused
+    {
+      style: 'activity',
+      trigger: 'yellow',
+      message: "If something's coming up — a game, an event, a group hangout — {{name}} might be a good person to invite. It's been about a month.",
+    },
+    {
+      style: 'activity',
+      trigger: 'red',
+      message: "You and {{name}} haven't crossed paths in a while. Maintain relationships stay warm when you loop people into what you're already doing.",
+    },
+  ],
+
+  transactional: [
+    // Conversation-focused
+    {
+      style: 'conversation',
+      trigger: 'yellow',
+      message: "It's been about 3 months since you connected with {{name}}. A quick check-in — how's work, how's life — keeps the professional line open.",
+    },
+    // Activity-focused
+    {
+      style: 'activity',
+      trigger: 'yellow',
+      message: "Any upcoming industry events or meetups? {{name}} might be worth grabbing coffee with — it's been about 3 months.",
+    },
+  ],
+
+  dormant: [],
+  new: [],
+};
 
 // ===========================================================================
 // Drift Detection Configuration
@@ -457,8 +708,16 @@ export function establishmentDaysRemaining(
  * Resolve the effective cadence for a contact, accounting for:
  *   1. Custom cadence override (highest priority)
  *   2. New relationship establishment multiplier (if in window)
- *   3. Intent default cadence (fallback)
- *   4. 'new' intent fallback cadence during establishment (special case)
+ *   3. Gender cadence multiplier (if user has gender set)
+ *   4. Intent default cadence (fallback)
+ *   5. 'new' intent fallback cadence during establishment (special case)
+ *
+ * Stacking order for multipliers:
+ *   effectiveCadence = baseCadence × newRelationshipMultiplier × genderMultiplier
+ *
+ * Both multipliers are optional and independent. A new female user's
+ * inner circle contact gets: 7 × 0.7 × 0.90 = 4.41 days.
+ * A male user's established nurture contact gets: 14 × 1.07 = 14.98 days.
  *
  * This is the single source of truth for "what cadence should this
  * contact be measured against right now?" All health calculations
@@ -468,31 +727,27 @@ export function establishmentDaysRemaining(
  * @param customCadenceDays - Optional user override
  * @param createdAt         - ISO timestamp of when the contact was added
  * @param now               - Override current time (for testing)
+ * @param gender            - Optional user gender for gender-aware modifiers
  * @returns Effective cadence in days, or null if no cadence applies
  *
  * @example
- * // Nurture contact added 2 weeks ago (in establishment window)
- * resolveEffectiveCadence('nurture', null, '2026-01-22T00:00:00Z');
- * // Returns: 9.8 (14 * 0.7)
+ * // Nurture contact, female user, added 2 weeks ago (in establishment window)
+ * resolveEffectiveCadence('nurture', null, '2026-01-22T00:00:00Z', undefined, 'female');
+ * // Returns: 9.1 (14 * 0.7 * 0.93)
  *
  * @example
- * // Nurture contact added 8 months ago (past establishment window)
+ * // Inner circle contact, male user, established relationship
+ * resolveEffectiveCadence('inner_circle', null, '2025-01-01T00:00:00Z', undefined, 'male');
+ * // Returns: 7.7 (7 * 1.10)
+ *
+ * @example
+ * // Nurture contact, no gender set, past establishment window
  * resolveEffectiveCadence('nurture', null, '2025-06-01T00:00:00Z');
- * // Returns: 14 (normal cadence)
+ * // Returns: 14 (normal cadence, no modifiers)
  *
  * @example
- * // 'new' intent contact added 5 days ago
- * resolveEffectiveCadence('new', null, '2026-01-30T00:00:00Z');
- * // Returns: 9.8 (14 fallback * 0.7 multiplier)
- *
- * @example
- * // 'new' intent contact added 7 months ago (past establishment)
- * resolveEffectiveCadence('new', null, '2025-07-01T00:00:00Z');
- * // Returns: null (no cadence — should have been sorted by now)
- *
- * @example
- * // Contact with custom cadence override (ignores multiplier)
- * resolveEffectiveCadence('nurture', 10, '2026-01-22T00:00:00Z');
+ * // Contact with custom cadence override (ignores all multipliers)
+ * resolveEffectiveCadence('nurture', 10, '2026-01-22T00:00:00Z', undefined, 'female');
  * // Returns: 10 (custom overrides everything)
  */
 export function resolveEffectiveCadence(
@@ -500,6 +755,7 @@ export function resolveEffectiveCadence(
   customCadenceDays?: number | null,
   createdAt?: string | null,
   now?: Date,
+  gender?: UserGender,
 ): number | null {
   // Custom cadence always wins — the user explicitly set it
   if (customCadenceDays !== null && customCadenceDays !== undefined) {
@@ -509,22 +765,126 @@ export function resolveEffectiveCadence(
   const config = INTENT_CONFIGS[intent];
   const inEstablishment = isWithinEstablishmentWindow(createdAt, now);
 
+  // Gender cadence multiplier (1.0 if no gender set)
+  const genderMultiplier = gender
+    ? GENDER_MODIFIERS[gender].cadenceMultiplier[intent]
+    : 1.0;
+
   // Special case: 'new' intent has no default cadence, but during
   // establishment we use a fallback to keep new contacts visible
   if (config.defaultCadenceDays === null) {
     if (intent === 'new' && inEstablishment) {
-      return NEW_RELATIONSHIP_CONFIG.fallbackCadenceDays * NEW_RELATIONSHIP_CONFIG.cadenceMultiplier;
+      return NEW_RELATIONSHIP_CONFIG.fallbackCadenceDays
+        * NEW_RELATIONSHIP_CONFIG.cadenceMultiplier
+        * genderMultiplier;
     }
     return null;
   }
 
-  // During establishment, tighten the cadence
+  // During establishment, tighten the cadence (then apply gender modifier)
   if (inEstablishment) {
-    return config.defaultCadenceDays * NEW_RELATIONSHIP_CONFIG.cadenceMultiplier;
+    return config.defaultCadenceDays
+      * NEW_RELATIONSHIP_CONFIG.cadenceMultiplier
+      * genderMultiplier;
   }
 
-  // Normal cadence
-  return config.defaultCadenceDays;
+  // Normal cadence with gender modifier
+  return config.defaultCadenceDays * genderMultiplier;
+}
+
+// ===========================================================================
+// Gender-Aware Nudge Selection
+// ===========================================================================
+
+/**
+ * Get the user's preferred nudge style based on their gender setting.
+ * Returns 'balanced' if no gender is set (system default).
+ *
+ * @param gender - User's gender setting (null = not set)
+ * @returns The preferred NudgeStyle
+ */
+export function getPreferredNudgeStyle(gender: UserGender): NudgeStyle {
+  if (!gender) return 'balanced';
+  return GENDER_MODIFIERS[gender].preferredNudgeStyle;
+}
+
+/**
+ * Get the style weight (probability of using preferred style) for a gender.
+ * Returns 0.5 (balanced) if no gender is set.
+ *
+ * @param gender - User's gender setting (null = not set)
+ * @returns Style weight between 0.0 and 1.0
+ */
+export function getStyleWeight(gender: UserGender): number {
+  if (!gender) return 0.5;
+  return GENDER_MODIFIERS[gender].styleWeight;
+}
+
+/**
+ * Pick a nudge template for a contact, incorporating gender-aware style
+ * preferences when the user has opted in.
+ *
+ * Selection logic:
+ *   1. If no gender set → use base templates from INTENT_CONFIGS (original behavior)
+ *   2. If gender set → roll against styleWeight to decide pool:
+ *      - Roll < styleWeight → pick from styled templates matching preferred style
+ *      - Roll >= styleWeight → pick from base templates (general pool)
+ *   3. If styled pool is empty for this intent/trigger → fall back to base
+ *
+ * This means a user with gender='female' and styleWeight=0.7 gets:
+ *   ~70% conversation-first nudges
+ *   ~30% general/balanced nudges from the base pool
+ *
+ * Returns null if no templates match (e.g., dormant contacts).
+ *
+ * @param intent       - The contact's intent type
+ * @param healthStatus - Current health status (determines trigger filter)
+ * @param gender       - User's gender setting (null = not set)
+ * @returns A nudge template, or null if none available
+ */
+export function pickNudgeTemplate(
+  intent: IntentType,
+  healthStatus: HealthStatus,
+  gender?: UserGender,
+): NudgeTemplate | null {
+  const config = INTENT_CONFIGS[intent];
+  const baseTemplates = config.nudgeTemplates;
+
+  if (baseTemplates.length === 0) {
+    return null;
+  }
+
+  // If gender is set, try styled templates first based on styleWeight
+  if (gender) {
+    const modifiers = GENDER_MODIFIERS[gender];
+    const roll = Math.random();
+
+    if (roll < modifiers.styleWeight) {
+      // Try the styled pool
+      const styledPool = STYLED_NUDGE_TEMPLATES[intent] ?? [];
+      const styledMatching = styledPool.filter(
+        (t) =>
+          t.style === modifiers.preferredNudgeStyle &&
+          (t.trigger === healthStatus || t.trigger === 'any'),
+      );
+
+      if (styledMatching.length > 0) {
+        return styledMatching[Math.floor(Math.random() * styledMatching.length)];
+      }
+      // Styled pool empty for this trigger — fall through to base
+    }
+  }
+
+  // Base pool (original behavior)
+  const matching = baseTemplates.filter(
+    (t) => t.trigger === healthStatus || t.trigger === 'any',
+  );
+
+  if (matching.length === 0) {
+    return baseTemplates[Math.floor(Math.random() * baseTemplates.length)];
+  }
+
+  return matching[Math.floor(Math.random() * matching.length)];
 }
 
 // ===========================================================================
@@ -549,6 +909,7 @@ export function resolveEffectiveCadence(
  * @param createdAt         - ISO timestamp of when the contact was added.
  *                            When provided and within the establishment window,
  *                            cadence is tightened by newRelationshipCadenceMultiplier.
+ * @param gender            - Optional user gender for gender-aware cadence modifiers.
  * @returns HealthStatus: 'green', 'yellow', or 'red'
  *
  * Rules:
@@ -558,6 +919,7 @@ export function resolveEffectiveCadence(
  *   - otherwise: days_elapsed / effectiveCadence compared against per-layer thresholds
  *   - kin contacts: thresholds *= (1 + kinDecayModifier)
  *   - new relationships in establishment window: cadence is tightened
+ *   - gender modifiers: cadence adjusted by gender multiplier when set
  */
 export function calculateHealthStatus(
   intent: IntentType,
@@ -566,9 +928,10 @@ export function calculateHealthStatus(
   isKin?: boolean,
   now?: Date,
   createdAt?: string | null,
+  gender?: UserGender,
 ): HealthStatus {
   const config = INTENT_CONFIGS[intent];
-  const cadence = resolveEffectiveCadence(intent, customCadenceDays, createdAt, now);
+  const cadence = resolveEffectiveCadence(intent, customCadenceDays, createdAt, now, gender);
 
   // No cadence = no health tracking
   if (cadence === null || cadence === undefined) {
@@ -786,10 +1149,10 @@ export function detectDrift(
  * Get the effective cadence for a contact, falling back to intent default.
  *
  * NOTE: This is the legacy helper that does NOT account for the new
- * relationship establishment multiplier. For full cadence resolution
- * including establishment window logic, use resolveEffectiveCadence().
- * This function is kept for backward compatibility with callers that
- * don't have access to createdAt.
+ * relationship establishment multiplier or gender modifiers. For full
+ * cadence resolution including establishment window and gender logic,
+ * use resolveEffectiveCadence(). This function is kept for backward
+ * compatibility with callers that don't have access to createdAt or gender.
  */
 export function getEffectiveCadence(
   intent: IntentType,
@@ -808,6 +1171,8 @@ export function getEffectiveCadence(
  * When createdAt is provided and within the establishment window,
  * cadence is tightened, which means status changes come sooner.
  *
+ * When gender is provided, cadence is adjusted by the gender multiplier.
+ *
  * Useful for scheduling nudge delivery at the right time.
  */
 export function daysUntilStatusChange(
@@ -817,9 +1182,10 @@ export function daysUntilStatusChange(
   isKin?: boolean,
   now?: Date,
   createdAt?: string | null,
+  gender?: UserGender,
 ): { daysUntilYellow: number | null; daysUntilRed: number | null } {
   const config = INTENT_CONFIGS[intent];
-  const cadence = resolveEffectiveCadence(intent, customCadenceDays, createdAt, now);
+  const cadence = resolveEffectiveCadence(intent, customCadenceDays, createdAt, now, gender);
 
   if (cadence === null || cadence === undefined || !lastContact) {
     return { daysUntilYellow: null, daysUntilRed: null };
@@ -839,35 +1205,6 @@ export function daysUntilStatusChange(
     daysUntilYellow: Math.max(0, yellowAt - elapsedDays),
     daysUntilRed: Math.max(0, redAt - elapsedDays),
   };
-}
-
-/**
- * Pick a nudge template for a contact based on their current health status.
- * Returns null if no templates match (e.g., dormant contacts).
- */
-export function pickNudgeTemplate(
-  intent: IntentType,
-  healthStatus: HealthStatus,
-): NudgeTemplate | null {
-  const config = INTENT_CONFIGS[intent];
-  const templates = config.nudgeTemplates;
-
-  if (templates.length === 0) {
-    return null;
-  }
-
-  // Filter to matching trigger
-  const matching = templates.filter(
-    (t) => t.trigger === healthStatus || t.trigger === 'any',
-  );
-
-  if (matching.length === 0) {
-    // Fall back to any available template
-    return templates[Math.floor(Math.random() * templates.length)];
-  }
-
-  // Random selection for variety
-  return matching[Math.floor(Math.random() * matching.length)];
 }
 
 /**
@@ -896,4 +1233,16 @@ export function getIntentOptions(): Array<{ value: IntentType; label: string; de
     label: INTENT_CONFIGS[type].label,
     description: INTENT_CONFIGS[type].description,
   }));
+}
+
+/**
+ * Get the gender modifiers for a user, or null if not applicable.
+ * Convenience wrapper for callers that want the full modifiers object.
+ *
+ * @param gender - User's gender setting (null = not set)
+ * @returns GenderModifiers or null
+ */
+export function getGenderModifiers(gender: UserGender): GenderModifiers | null {
+  if (!gender) return null;
+  return GENDER_MODIFIERS[gender];
 }
