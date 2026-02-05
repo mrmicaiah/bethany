@@ -23,22 +23,38 @@ class_name = "OnboardingDO"
 tag = "v1"
 new_classes = ["OnboardingDO"]
 
-# Cron triggers for nudge generation and health checks
+# ===========================================================================
+# Cron Triggers — Scheduled Jobs
+# ===========================================================================
+#
+# All times are UTC. Central Time is UTC-6 (standard) or UTC-5 (daylight).
+#
+# Job schedule:
+#   0 9 * * *   — Daily nudge generation for premium/trial users (3am Central)
+#   0 9 * * 1   — Weekly nudge generation for free users (Monday 3am Central)
+#   0 14 * * *  — Nudge delivery window (8am Central)
+#   0 0 * * *   — Midnight maintenance (trial expiration, usage cleanup)
+#   0 0 * * 0   — Weekly health recalculation (Sunday midnight)
+#
+# @see worker/cron/scheduled.ts for job implementations
+# ===========================================================================
 [triggers]
 crons = [
-  "0 9 * * *",   # 9am UTC (3am Central) — daily nudge generation
-  "0 14 * * *",  # 2pm UTC (8am Central) — morning delivery window
-  "0 0 * * 0",   # Weekly health recalculation (Sunday midnight UTC)
+  "0 9 * * *",   # Daily nudge generation (premium/trial)
+  "0 9 * * 1",   # Weekly nudge generation (free tier, Monday only)
+  "0 14 * * *",  # Nudge delivery (morning window)
+  "0 0 * * *",   # Midnight: trial expiration check + usage cleanup
+  "0 0 * * 0",   # Sunday: weekly health recalculation
 ]
 
 [vars]
 # Non-secret config
 ENVIRONMENT = "production"
 BETHANY_WORKER_URL = "https://bethany.mrmicaiah.workers.dev"
-MAX_FREE_CONTACTS = 15
-TRIAL_DAYS = 14
+MAX_FREE_CONTACTS = "15"
+TRIAL_DAYS = "14"
 
-# Secrets (set via `wrangler secret put <n>`):
+# Secrets (set via `wrangler secret put <NAME>`):
 # ANTHROPIC_API_KEY      — Claude API for braindump parsing, nudge generation
 # SENDBLUE_API_KEY       — SMS delivery
 # SENDBLUE_API_SECRET    — SMS delivery
