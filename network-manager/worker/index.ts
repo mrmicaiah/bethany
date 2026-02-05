@@ -8,8 +8,8 @@
  *   - Cron triggers for nudges and health checks
  *   - Internal API for Bethany worker communication
  *
- * IMPORTANT: The OnboardingDO Durable Object class MUST be re-exported
- * from this entry point for Wrangler to register it.
+ * IMPORTANT: All Durable Object classes MUST be re-exported from this
+ * entry point for Wrangler to register them.
  */
 
 import { Env } from '../shared/types';
@@ -21,11 +21,12 @@ import { handleScheduled } from './cron/scheduled';
 
 // Re-export Durable Object classes — Wrangler requires these at the entry point
 export { OnboardingDO } from './services/onboarding-service';
+export { UserDiscoveryDO } from './services/user-discovery-service';
 
 const VERSION = {
-  version: '0.7.0',
+  version: '0.8.0',
   updated: '2026-02-05',
-  codename: 'proactive-nudges',
+  codename: 'user-discovery',
 };
 
 export default {
