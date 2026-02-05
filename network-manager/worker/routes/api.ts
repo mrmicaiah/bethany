@@ -12,6 +12,7 @@
  *   /api/interactions/*  — Log and list interactions
  *   /api/braindump/*     — Parse natural language contact dumps
  *   /api/export/*        — CSV export with filters
+ *   /api/import/*        — CSV import and bulk import flow
  *   /api/user/*          — Profile read/update
  *   /api/subscription/*  — Tier info, checkout, portal
  *   /api/stripe/webhook  — Stripe webhook handler (no auth)
@@ -175,6 +176,11 @@ export async function handleApiRoute(
     // ─── Export ───────────────────────────────────────────────
     } else if (path === '/api/export' && method === 'GET') {
       response = await handleExport(url, db, user.id);
+
+    // ─── Import (CSV upload, bulk import flow) ────────────────
+    } else if (path.startsWith('/api/import/')) {
+      const { handleImportRoute } = await import('./import');
+      response = await handleImportRoute(request, env, user, path);
 
     // ─── User ─────────────────────────────────────────────────
     } else if (path === '/api/user' && method === 'GET') {
