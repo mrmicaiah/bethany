@@ -17,9 +17,10 @@ export interface Env {
   STORAGE: R2Bucket;
 
   // Durable Objects
-  ONBOARDING_DO: DurableObjectNamespace;     // Post-signup onboarding
-  USER_DISCOVERY_DO: DurableObjectNamespace; // Pre-signup discovery
-  NUDGE_CONTEXT_DO: DurableObjectNamespace;  // Proactive nudge follow-up
+  ONBOARDING_DO: DurableObjectNamespace;      // Post-signup onboarding
+  USER_DISCOVERY_DO: DurableObjectNamespace;  // Pre-signup discovery
+  NUDGE_CONTEXT_DO: DurableObjectNamespace;   // Proactive nudge follow-up
+  INTENT_SORTING_DO: DurableObjectNamespace;  // Intent assignment sessions
 
   // Secrets — Core
   ANTHROPIC_API_KEY: string;
