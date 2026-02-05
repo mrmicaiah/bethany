@@ -6,16 +6,22 @@
  *   - Dashboard API endpoints
  *   - Cron triggers for nudges and health checks
  *   - Internal API for Bethany worker communication
+ *
+ * IMPORTANT: The OnboardingDO Durable Object class MUST be re-exported
+ * from this entry point for Wrangler to register it.
  */
 
 import { Env } from '../shared/types';
 import { corsHeaders, jsonResponse, errorResponse } from '../shared/http';
 import { handleSmsWebhook } from './routes/sms';
 
+// Re-export Durable Object classes — Wrangler requires these at the entry point
+export { OnboardingDO } from './services/onboarding-service';
+
 const VERSION = {
-  version: '0.2.0',
+  version: '0.3.0',
   updated: '2026-02-05',
-  codename: 'routing',
+  codename: 'onboarding',
 };
 
 export default {
