@@ -2,7 +2,8 @@
  * Bethany Network Manager — Intent Configuration
  *
  * Defines the six relationship intent types, their Dunbar-grounded cadence
- * defaults, health calculation logic, and nudge message templates.
+ * defaults, health calculation logic, nudge message templates, and drift
+ * detection for identifying layer migration.
  *
  * Dunbar's layers:
  *   ~5   Support Clique   → inner_circle  (weekly)
@@ -22,18 +23,26 @@
  *   for kin contacts — a modifier of 0.5 means kin get 1.5x the
  *   threshold window before status changes.
  *
+ * Drift Detection:
+ *   Health status measures a contact against their OWN cadence.
+ *   Drift detection compares actual interaction frequency against ALL
+ *   layer thresholds to catch when someone is migrating to a lower
+ *   Dunbar layer. This is the core differentiator from every competitor
+ *   (Clay, Dex, UpHabit) — none implement cross-layer comparison.
+ *
  * Health thresholds:
  *   green  = within cadence window
  *   yellow = 1.0x–1.5x cadence elapsed (slipping)
  *   red    = >1.5x cadence elapsed (overdue)
  *   (kin contacts: thresholds multiplied by 1 + kinDecayModifier)
  *
- * @see shared/models.ts for IntentType, HealthStatus, and ContactKind
+ * @see shared/models.ts for IntentType, HealthStatus, ContactKind, DriftAlert
  * @see Roberts & Dunbar (2011). The costs of family and friends.
  * @see Roberts & Dunbar (2015). Managing relationship decay.
+ * @see PLOS ONE (2025). Reflecting on Dunbar's numbers (N=906).
  */
 
-import type { IntentType, HealthStatus } from './models';
+import type { IntentType, HealthStatus, DriftSeverity, DriftAlert, DriftEvidence } from './models';
 
 // ===========================================================================
 // Intent Configuration
@@ -82,6 +91,55 @@ export interface NudgeTemplate {
   /** Template string — {{name}} is replaced with contact name */
   message: string;
 }
+
+// ===========================================================================
+// Drift Detection Configuration
+// ===========================================================================
+
+/**
+ * Configuration for drift detection — comparing actual interaction frequency
+ * against layer boundary cadences to detect Dunbar layer migration.
+ *
+ * From dunbar-cadence-research-findings.md, Section 6 (DECAY_CONFIG):
+ *   driftWindowDays: 90 (rolling 90-day assessment window)
+ *
+ * The "watching" buffer means we flag early — before the contact's
+ * average interval actually crosses into the next layer's cadence.
+ * This gives Bethany time to nudge before the drift is complete.
+ */
+export const DRIFT_CONFIG = {
+  /** Rolling window in days for assessing interaction frequency */
+  windowDays: 90,
+  /**
+   * Minimum interactions required in the window before drift detection
+   * kicks in. With fewer data points, the average is too noisy to be
+   * meaningful. 2 interactions = at least one interval to measure.
+   */
+  minInteractions: 2,
+  /**
+   * Buffer multiplier for "watching" severity.
+   * When avg interval > ownCadence * watchingBuffer but hasn't yet
+   * reached the next layer's cadence, we flag as "watching".
+   * 1.5 means we start watching at 1.5x their assigned cadence.
+   */
+  watchingBuffer: 1.5,
+} as const;
+
+/**
+ * Ordered list of active Dunbar layers from innermost to outermost.
+ * Used by drift detection to determine which layer a contact's actual
+ * frequency matches. dormant and new are excluded — they have no cadence
+ * and can't drift.
+ *
+ * The order matters: detectDrift() walks outward from the contact's
+ * assigned layer, checking each boundary.
+ */
+export const DUNBAR_LAYER_ORDER: IntentType[] = [
+  'inner_circle',  // 7 days
+  'nurture',       // 14 days
+  'maintain',      // 30 days
+  'transactional', // 90 days
+];
 
 // ===========================================================================
 // The Six Intent Types
@@ -211,7 +269,6 @@ export const INTENT_CONFIGS: Record<IntentType, IntentConfig> = {
     redThreshold: 1.5,
     kinDecayModifier: 0.0,
     nudgeTemplates: [],
-    // No nudges — dormant contacts don't generate reminders
   },
 
   new: {
@@ -298,6 +355,181 @@ export function calculateHealthStatus(
   }
 
   return 'green';
+}
+
+// ===========================================================================
+// Drift Detection
+// ===========================================================================
+
+/**
+ * Detect whether a contact is drifting from their assigned Dunbar layer
+ * based on actual interaction frequency over a rolling window.
+ *
+ * This is DIFFERENT from health status:
+ *   - Health = "are you keeping up with THIS contact's cadence?"
+ *   - Drift  = "does your actual frequency match a DIFFERENT layer?"
+ *
+ * Health catches "you're overdue." Drift catches "this person is falling
+ * out of your inner circle and into your maintain layer."
+ *
+ * Algorithm:
+ *   1. Calculate average interaction interval over the window
+ *   2. Compare against the contact's assigned layer cadence
+ *   3. Walk outward through DUNBAR_LAYER_ORDER to find which layer
+ *      the actual frequency matches
+ *   4. Determine severity based on how many layers they've drifted
+ *
+ * @param contactId    - The contact's ID (for the alert)
+ * @param intent       - The contact's assigned intent type
+ * @param interactions - Array of interaction dates (ISO strings) within
+ *                       the assessment window, sorted newest-first.
+ *                       The caller is responsible for querying the right
+ *                       window from the interactions table.
+ * @param lastContact  - Most recent interaction date (ISO string), or null
+ * @param customCadenceDays - Optional cadence override
+ * @param isKin        - Whether this contact is kin (adjusts thresholds)
+ * @param now          - Override current time (for testing)
+ * @returns DriftAlert if drift detected, null if contact is on track
+ *
+ * @example
+ * // Inner circle contact with 35-day avg interval
+ * detectDrift('contact-123', 'inner_circle', interactionDates, lastDate);
+ * // Returns: { driftingTowardLayer: 'maintain', severity: 'fallen', ... }
+ *
+ * @example
+ * // Nurture contact with 16-day avg interval (slightly over 14-day cadence)
+ * detectDrift('contact-456', 'nurture', interactionDates, lastDate);
+ * // Returns: { driftingTowardLayer: 'maintain', severity: 'watching', ... }
+ */
+export function detectDrift(
+  contactId: string,
+  intent: IntentType,
+  interactions: string[],
+  lastContact: string | null,
+  customCadenceDays?: number | null,
+  isKin?: boolean,
+  now?: Date,
+): DriftAlert | null {
+  const config = INTENT_CONFIGS[intent];
+  const cadence = customCadenceDays ?? config.defaultCadenceDays;
+
+  // Can't drift if there's no cadence (dormant, new)
+  if (cadence === null || cadence === undefined) {
+    return null;
+  }
+
+  // Can't assess drift without enough data
+  if (interactions.length < DRIFT_CONFIG.minInteractions) {
+    return null;
+  }
+
+  // Can't drift if the intent isn't in the active layer order
+  const currentLayerIndex = DUNBAR_LAYER_ORDER.indexOf(intent);
+  if (currentLayerIndex === -1) {
+    return null;
+  }
+
+  // Already at the outermost active layer — can't drift further
+  // (transactional contacts drifting would mean dormant, which is a
+  // different concept handled by health status going red)
+  if (currentLayerIndex === DUNBAR_LAYER_ORDER.length - 1) {
+    return null;
+  }
+
+  const currentTime = now ?? new Date();
+
+  // Calculate average interaction interval
+  // Sort interactions newest-first, compute gaps between consecutive dates
+  const sortedDates = interactions
+    .map(d => new Date(d).getTime())
+    .sort((a, b) => b - a); // newest first
+
+  // Include the gap from now to most recent interaction
+  // This prevents a false "all good" when someone had 3 interactions
+  // 80 days ago but nothing since
+  const gaps: number[] = [];
+  gaps.push((currentTime.getTime() - sortedDates[0]) / (1000 * 60 * 60 * 24));
+
+  for (let i = 0; i < sortedDates.length - 1; i++) {
+    const gapDays = (sortedDates[i] - sortedDates[i + 1]) / (1000 * 60 * 60 * 24);
+    gaps.push(gapDays);
+  }
+
+  const avgInterval = gaps.reduce((sum, g) => sum + g, 0) / gaps.length;
+
+  // Apply kin modifier to the assigned cadence for comparison
+  const kinMultiplier = isKin ? (1 + config.kinDecayModifier) : 1;
+  const effectiveCadence = cadence * kinMultiplier;
+
+  // Not even past the watching buffer — contact is on track
+  if (avgInterval <= effectiveCadence * DRIFT_CONFIG.watchingBuffer) {
+    return null;
+  }
+
+  // Walk outward through layers to find where the frequency matches
+  let matchedLayerIndex = currentLayerIndex;
+  for (let i = currentLayerIndex + 1; i < DUNBAR_LAYER_ORDER.length; i++) {
+    const layerConfig = INTENT_CONFIGS[DUNBAR_LAYER_ORDER[i]];
+    const layerCadence = layerConfig.defaultCadenceDays;
+    if (layerCadence === null) continue;
+
+    // Apply kin modifier to the comparison layer too
+    const effectiveLayerCadence = isKin
+      ? layerCadence * (1 + layerConfig.kinDecayModifier)
+      : layerCadence;
+
+    if (avgInterval >= effectiveLayerCadence) {
+      matchedLayerIndex = i;
+    } else {
+      // Haven't reached this layer's cadence yet, stop walking
+      break;
+    }
+  }
+
+  // Determine the layer they're drifting toward
+  // If avgInterval didn't reach any lower layer's cadence, they're
+  // in the gap between their own layer and the next — "watching"
+  const driftingTowardLayer = matchedLayerIndex > currentLayerIndex
+    ? DUNBAR_LAYER_ORDER[matchedLayerIndex]
+    : DUNBAR_LAYER_ORDER[currentLayerIndex + 1];
+
+  // Determine severity based on distance
+  const layerDistance = matchedLayerIndex - currentLayerIndex;
+  let severity: DriftSeverity;
+  if (layerDistance >= 2) {
+    severity = 'fallen';
+  } else if (layerDistance === 1) {
+    severity = 'drifting';
+  } else {
+    severity = 'watching';
+  }
+
+  // Calculate days since last contact for evidence
+  const daysSinceLastContact = lastContact
+    ? (currentTime.getTime() - new Date(lastContact).getTime()) / (1000 * 60 * 60 * 24)
+    : DRIFT_CONFIG.windowDays; // If no last contact, use full window
+
+  // Build the matched layer cadence for evidence
+  const matchedConfig = INTENT_CONFIGS[driftingTowardLayer];
+  const matchedCadence = matchedConfig.defaultCadenceDays ?? 0;
+
+  const evidence: DriftEvidence = {
+    avgInteractionInterval: Math.round(avgInterval * 10) / 10,
+    expectedCadenceDays: cadence,
+    matchedLayerCadenceDays: matchedCadence,
+    interactionCount: interactions.length,
+    windowDays: DRIFT_CONFIG.windowDays,
+    daysSinceLastContact: Math.round(daysSinceLastContact * 10) / 10,
+  };
+
+  return {
+    contactId,
+    currentLayer: intent,
+    driftingTowardLayer,
+    severity,
+    evidence,
+    detectedAt: currentTime.toISOString(),
+  };
 }
 
 // ===========================================================================
