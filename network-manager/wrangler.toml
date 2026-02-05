@@ -33,6 +33,11 @@ class_name = "UserDiscoveryDO"
 name = "NUDGE_CONTEXT_DO"
 class_name = "NudgeContextDO"
 
+# Intent sorting session state
+[[durable_objects.bindings]]
+name = "INTENT_SORTING_DO"
+class_name = "IntentSortingDO"
+
 [[migrations]]
 tag = "v1"
 new_classes = ["OnboardingDO"]
@@ -44,6 +49,10 @@ new_classes = ["UserDiscoveryDO"]
 [[migrations]]
 tag = "v3"
 new_classes = ["NudgeContextDO"]
+
+[[migrations]]
+tag = "v4"
+new_classes = ["IntentSortingDO"]
 
 # ===========================================================================
 # Cron Triggers — Scheduled Jobs
