@@ -17,7 +17,8 @@ export interface Env {
   STORAGE: R2Bucket;
 
   // Durable Objects
-  ONBOARDING_DO: DurableObjectNamespace;
+  ONBOARDING_DO: DurableObjectNamespace;     // Post-signup onboarding
+  USER_DISCOVERY_DO: DurableObjectNamespace; // Pre-signup discovery
 
   // Secrets — Core
   ANTHROPIC_API_KEY: string;
@@ -35,9 +36,10 @@ export interface Env {
   // Vars
   ENVIRONMENT: string;
   BETHANY_WORKER_URL: string;
+  SIGNUP_BASE_URL: string;   // Base URL for signup links
   MAX_FREE_CONTACTS: string; // wrangler vars are always strings
   TRIAL_DAYS: string;
-  DASHBOARD_URL: string; // URL for redirects after Stripe checkout
+  DASHBOARD_URL: string;     // URL for redirects after Stripe checkout
 }
 
 // ---------------------------------------------------------------------------
