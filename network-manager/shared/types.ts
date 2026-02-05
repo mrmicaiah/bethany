@@ -16,6 +16,9 @@ export interface Env {
   // R2 Storage (bulk imports, exports, backups)
   STORAGE: R2Bucket;
 
+  // Durable Objects
+  ONBOARDING_DO: DurableObjectNamespace;
+
   // Secrets
   ANTHROPIC_API_KEY: string;
   SENDBLUE_API_KEY: string;
