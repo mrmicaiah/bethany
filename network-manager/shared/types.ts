@@ -19,6 +19,7 @@ export interface Env {
   // Durable Objects
   ONBOARDING_DO: DurableObjectNamespace;     // Post-signup onboarding
   USER_DISCOVERY_DO: DurableObjectNamespace; // Pre-signup discovery
+  NUDGE_CONTEXT_DO: DurableObjectNamespace;  // Proactive nudge follow-up
 
   // Secrets — Core
   ANTHROPIC_API_KEY: string;
