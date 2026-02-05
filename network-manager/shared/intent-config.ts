@@ -23,6 +23,15 @@
  *   for kin contacts — a modifier of 0.5 means kin get 1.5x the
  *   threshold window before status changes.
  *
+ * New Relationship Establishment:
+ *   Roberts & Dunbar (2011, 2015) found that new relationships need
+ *   extra nurturing to establish. The newRelationshipCadenceMultiplier
+ *   tightens cadence windows during the establishment period (first 6
+ *   months after a contact is added). A multiplier of 0.7 means 30%
+ *   shorter cadence windows — e.g., a 14-day nurture cadence becomes
+ *   ~10 days for new contacts. After the establishment window passes,
+ *   normal intent cadence takes over.
+ *
  * Drift Detection:
  *   Health status measures a contact against their OWN cadence.
  *   Drift detection compares actual interaction frequency against ALL
@@ -35,11 +44,13 @@
  *   yellow = 1.0x–1.5x cadence elapsed (slipping)
  *   red    = >1.5x cadence elapsed (overdue)
  *   (kin contacts: thresholds multiplied by 1 + kinDecayModifier)
+ *   (new contacts in establishment window: cadence *= newRelationshipCadenceMultiplier)
  *
  * @see shared/models.ts for IntentType, HealthStatus, ContactKind, DriftAlert
  * @see Roberts & Dunbar (2011). The costs of family and friends.
  * @see Roberts & Dunbar (2015). Managing relationship decay.
  * @see PLOS ONE (2025). Reflecting on Dunbar's numbers (N=906).
+ * @see dunbar-cadence-research-findings.md, Section 6 (DECAY_CONFIG).
  */
 
 import type { IntentType, HealthStatus, DriftSeverity, DriftAlert, DriftEvidence } from './models';
@@ -91,6 +102,64 @@ export interface NudgeTemplate {
   /** Template string — {{name}} is replaced with contact name */
   message: string;
 }
+
+// ===========================================================================
+// New Relationship Establishment Configuration
+// ===========================================================================
+
+/**
+ * Configuration for new relationship cadence tightening.
+ *
+ * Research basis: Roberts & Dunbar (2011, 2015) found that new
+ * relationships need MORE frequent contact to establish. Without
+ * extra nurturing in the early months, new connections decay before
+ * they ever solidify.
+ *
+ * From dunbar-cadence-research-findings.md, Section 6 (DECAY_CONFIG):
+ *   newRelationshipCadenceMultiplier: 0.7  (30% shorter windows)
+ *   stabilizationMonths: 6
+ *
+ * How it works:
+ *   - When a contact is within the establishment window (based on
+ *     their created_at date), the effective cadence is multiplied
+ *     by cadenceMultiplier. E.g., a 14-day nurture cadence becomes
+ *     14 * 0.7 = ~10 days.
+ *   - This applies to ANY intent type that has an active cadence,
+ *     not just the 'new' intent. A contact sorted into 'nurture'
+ *     on day 1 still gets tighter cadence for the first 6 months.
+ *   - The 'new' intent itself gets a fallback cadence during the
+ *     establishment window (fallbackCadenceDays) so unsorted contacts
+ *     aren't completely ignored.
+ *   - After the establishment window passes, normal cadence resumes.
+ *   - Stacks with kin modifier: a new kin contact gets tighter cadence
+ *     AND relaxed thresholds. The multiplier applies to cadence, the
+ *     kin modifier applies to thresholds — they're independent axes.
+ */
+export const NEW_RELATIONSHIP_CONFIG = {
+  /**
+   * Multiplier applied to cadence during the establishment period.
+   * 0.7 = 30% shorter cadence windows (more frequent contact).
+   * Applied as: effectiveCadence = baseCadence * cadenceMultiplier
+   */
+  cadenceMultiplier: 0.7,
+  /**
+   * How long the establishment period lasts, in days.
+   * 180 days ≈ 6 months. After this, normal cadence takes over.
+   */
+  establishmentDays: 180,
+  /**
+   * Fallback cadence for 'new' intent contacts during establishment.
+   * The 'new' intent has defaultCadenceDays: null (no cadence), but
+   * during the establishment window we want to nudge the user to
+   * actually sort and reach out to new contacts. 14 days gives them
+   * a reasonable window before Bethany starts nudging.
+   *
+   * This only applies when intent === 'new' AND the contact is within
+   * the establishment window. Once the window closes, 'new' contacts
+   * revert to no cadence (they should have been sorted by then).
+   */
+  fallbackCadenceDays: 14,
+} as const;
 
 // ===========================================================================
 // Drift Detection Configuration
@@ -286,9 +355,143 @@ export const INTENT_CONFIGS: Record<IntentType, IntentConfig> = {
         trigger: 'any',
         message: "You added {{name}} recently but haven't sorted them yet. Want to tell me a bit about them so I can help you figure out the right cadence?",
       },
+      {
+        trigger: 'yellow',
+        message: "{{name}} is still new in your network and you haven't reached out yet. New connections need early attention — even a quick hello helps solidify the relationship.",
+      },
+      {
+        trigger: 'red',
+        message: "It's been a while since you added {{name}} and they haven't heard from you. New relationships are fragile — if this one matters, now's the time to reach out before the window closes.",
+      },
     ],
   },
 };
+
+// ===========================================================================
+// New Relationship Helpers
+// ===========================================================================
+
+/**
+ * Determine whether a contact is within the establishment window.
+ *
+ * During this window, cadence is tightened by NEW_RELATIONSHIP_CONFIG.cadenceMultiplier
+ * to give new relationships the extra attention they need to solidify.
+ *
+ * @param createdAt - ISO timestamp of when the contact was added
+ * @param now       - Override current time (for testing)
+ * @returns true if the contact is within the establishment window
+ */
+export function isWithinEstablishmentWindow(
+  createdAt: string | null | undefined,
+  now?: Date,
+): boolean {
+  if (!createdAt) return false;
+
+  const currentTime = now ?? new Date();
+  const createdDate = new Date(createdAt);
+  const elapsedMs = currentTime.getTime() - createdDate.getTime();
+  const elapsedDays = elapsedMs / (1000 * 60 * 60 * 24);
+
+  return elapsedDays <= NEW_RELATIONSHIP_CONFIG.establishmentDays;
+}
+
+/**
+ * Get the number of days remaining in the establishment window.
+ * Returns 0 if the window has closed, null if createdAt is missing.
+ *
+ * Useful for dashboard display: "New relationship boost: 47 days remaining"
+ *
+ * @param createdAt - ISO timestamp of when the contact was added
+ * @param now       - Override current time (for testing)
+ */
+export function establishmentDaysRemaining(
+  createdAt: string | null | undefined,
+  now?: Date,
+): number | null {
+  if (!createdAt) return null;
+
+  const currentTime = now ?? new Date();
+  const createdDate = new Date(createdAt);
+  const elapsedMs = currentTime.getTime() - createdDate.getTime();
+  const elapsedDays = elapsedMs / (1000 * 60 * 60 * 24);
+  const remaining = NEW_RELATIONSHIP_CONFIG.establishmentDays - elapsedDays;
+
+  return Math.max(0, Math.round(remaining));
+}
+
+/**
+ * Resolve the effective cadence for a contact, accounting for:
+ *   1. Custom cadence override (highest priority)
+ *   2. New relationship establishment multiplier (if in window)
+ *   3. Intent default cadence (fallback)
+ *   4. 'new' intent fallback cadence during establishment (special case)
+ *
+ * This is the single source of truth for "what cadence should this
+ * contact be measured against right now?" All health calculations
+ * and nudge scheduling should use this function.
+ *
+ * @param intent            - The contact's intent type
+ * @param customCadenceDays - Optional user override
+ * @param createdAt         - ISO timestamp of when the contact was added
+ * @param now               - Override current time (for testing)
+ * @returns Effective cadence in days, or null if no cadence applies
+ *
+ * @example
+ * // Nurture contact added 2 weeks ago (in establishment window)
+ * resolveEffectiveCadence('nurture', null, '2026-01-22T00:00:00Z');
+ * // Returns: 9.8 (14 * 0.7)
+ *
+ * @example
+ * // Nurture contact added 8 months ago (past establishment window)
+ * resolveEffectiveCadence('nurture', null, '2025-06-01T00:00:00Z');
+ * // Returns: 14 (normal cadence)
+ *
+ * @example
+ * // 'new' intent contact added 5 days ago
+ * resolveEffectiveCadence('new', null, '2026-01-30T00:00:00Z');
+ * // Returns: 9.8 (14 fallback * 0.7 multiplier)
+ *
+ * @example
+ * // 'new' intent contact added 7 months ago (past establishment)
+ * resolveEffectiveCadence('new', null, '2025-07-01T00:00:00Z');
+ * // Returns: null (no cadence — should have been sorted by now)
+ *
+ * @example
+ * // Contact with custom cadence override (ignores multiplier)
+ * resolveEffectiveCadence('nurture', 10, '2026-01-22T00:00:00Z');
+ * // Returns: 10 (custom overrides everything)
+ */
+export function resolveEffectiveCadence(
+  intent: IntentType,
+  customCadenceDays?: number | null,
+  createdAt?: string | null,
+  now?: Date,
+): number | null {
+  // Custom cadence always wins — the user explicitly set it
+  if (customCadenceDays !== null && customCadenceDays !== undefined) {
+    return customCadenceDays;
+  }
+
+  const config = INTENT_CONFIGS[intent];
+  const inEstablishment = isWithinEstablishmentWindow(createdAt, now);
+
+  // Special case: 'new' intent has no default cadence, but during
+  // establishment we use a fallback to keep new contacts visible
+  if (config.defaultCadenceDays === null) {
+    if (intent === 'new' && inEstablishment) {
+      return NEW_RELATIONSHIP_CONFIG.fallbackCadenceDays * NEW_RELATIONSHIP_CONFIG.cadenceMultiplier;
+    }
+    return null;
+  }
+
+  // During establishment, tighten the cadence
+  if (inEstablishment) {
+    return config.defaultCadenceDays * NEW_RELATIONSHIP_CONFIG.cadenceMultiplier;
+  }
+
+  // Normal cadence
+  return config.defaultCadenceDays;
+}
 
 // ===========================================================================
 // Health Calculation
@@ -298,21 +501,24 @@ export const INTENT_CONFIGS: Record<IntentType, IntentConfig> = {
  * Calculate the health status of a contact based on their intent and
  * when they were last contacted.
  *
- * @param intent       - The contact's intent type
- * @param lastContact  - ISO timestamp of the last interaction, or null
+ * @param intent            - The contact's intent type
+ * @param lastContact       - ISO timestamp of the last interaction, or null
  * @param customCadenceDays - Optional override of the intent's default cadence
- * @param isKin        - Whether the contact is kin (family). When true,
- *                       thresholds are relaxed by the intent's kinDecayModifier.
- *                       E.g., inner_circle with kinDecayModifier 0.5:
- *                       yellow goes from 1.0x to 1.5x, red from 1.5x to 2.25x.
- * @param now          - Override current time (for testing)
+ * @param isKin             - Whether the contact is kin (family). When true,
+ *                            thresholds are relaxed by the intent's kinDecayModifier.
+ * @param now               - Override current time (for testing)
+ * @param createdAt         - ISO timestamp of when the contact was added.
+ *                            When provided and within the establishment window,
+ *                            cadence is tightened by newRelationshipCadenceMultiplier.
  * @returns HealthStatus: 'green', 'yellow', or 'red'
  *
  * Rules:
- *   - dormant and new contacts with no cadence are always 'green'
+ *   - dormant contacts (and new contacts outside establishment) with no
+ *     cadence are always 'green'
  *   - contacts with no lastContact date are 'yellow' (unknown state)
- *   - otherwise: days_elapsed / cadence compared against thresholds
+ *   - otherwise: days_elapsed / effectiveCadence compared against thresholds
  *   - kin contacts: thresholds *= (1 + kinDecayModifier)
+ *   - new relationships in establishment window: cadence is tightened
  */
 export function calculateHealthStatus(
   intent: IntentType,
@@ -320,9 +526,10 @@ export function calculateHealthStatus(
   customCadenceDays?: number | null,
   isKin?: boolean,
   now?: Date,
+  createdAt?: string | null,
 ): HealthStatus {
   const config = INTENT_CONFIGS[intent];
-  const cadence = customCadenceDays ?? config.defaultCadenceDays;
+  const cadence = resolveEffectiveCadence(intent, customCadenceDays, createdAt, now);
 
   // No cadence = no health tracking
   if (cadence === null || cadence === undefined) {
@@ -538,6 +745,12 @@ export function detectDrift(
 
 /**
  * Get the effective cadence for a contact, falling back to intent default.
+ *
+ * NOTE: This is the legacy helper that does NOT account for the new
+ * relationship establishment multiplier. For full cadence resolution
+ * including establishment window logic, use resolveEffectiveCadence().
+ * This function is kept for backward compatibility with callers that
+ * don't have access to createdAt.
  */
 export function getEffectiveCadence(
   intent: IntentType,
@@ -553,6 +766,9 @@ export function getEffectiveCadence(
  * When isKin is true, thresholds are relaxed by kinDecayModifier,
  * giving family contacts more breathing room before status changes.
  *
+ * When createdAt is provided and within the establishment window,
+ * cadence is tightened, which means status changes come sooner.
+ *
  * Useful for scheduling nudge delivery at the right time.
  */
 export function daysUntilStatusChange(
@@ -561,9 +777,10 @@ export function daysUntilStatusChange(
   customCadenceDays?: number | null,
   isKin?: boolean,
   now?: Date,
+  createdAt?: string | null,
 ): { daysUntilYellow: number | null; daysUntilRed: number | null } {
   const config = INTENT_CONFIGS[intent];
-  const cadence = customCadenceDays ?? config.defaultCadenceDays;
+  const cadence = resolveEffectiveCadence(intent, customCadenceDays, createdAt, now);
 
   if (cadence === null || cadence === undefined || !lastContact) {
     return { daysUntilYellow: null, daysUntilRed: null };
