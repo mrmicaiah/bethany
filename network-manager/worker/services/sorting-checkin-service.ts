@@ -1,433 +1,374 @@
 /**
- * Sorting Check-in Service — Weekly Proactive Outreach for Unsorted Contacts
+ * Sorting Check-in Service — Weekly proactive sorting offers.
  *
- * This service implements the weekly sorting check-in flow:
+ * This service implements the "sorting check-in" feature: a weekly
+ * scheduled message that prompts users to sort contacts that are still
+ * in the 'new' intent bucket or missing clear goals.
  *
- *   1. Query users who have unsorted or intent-less contacts
- *   2. Check they haven't received a sorting offer recently
- *   3. Send a friendly check-in via SMS
- *   4. Offer choice: sort via SMS or dashboard
- *   5. Track last_sorting_offer to avoid spamming
+ * How it works:
  *
- * Tier Limits:
+ *   1. Weekly cron (Monday, after nudges) calls generateSortingCheckins()
+ *   2. For each user, we count:
+ *      - Contacts with intent='new' (unsorted)
+ *      - Contacts with intent='new' that have no notes (no context)
+ *   3. If counts > 0 and user hasn't been offered this week, send check-in
+ *   4. Check-in offers choice: sort via SMS or use web dashboard
+ *   5. Update last_sorting_offer to prevent spam
  *
- *   - Free users: Can sort up to 5 contacts per week via SMS
- *   - Premium users: Unlimited sorting
+ * Tier limits:
  *
- * Integration:
+ *   - Free users: Can only sort up to 5 contacts per week via SMS
+ *   - Premium/trial: Unlimited sorting
  *
- *   Called by the Monday 9am UTC cron job in scheduled.ts.
- *   Works alongside bulk-import-flow.ts and intent-assignment-flow.ts.
+ * The sorting flow itself is handled by IntentSortingDO when the user
+ * chooses to sort via SMS. This service only handles the proactive offer.
  *
- * @see worker/cron/scheduled.ts for cron trigger
- * @see worker/services/bulk-import-flow.ts for post-import sorting
- * @see worker/services/intent-assignment-flow.ts for contact-by-contact sorting
+ * @see worker/cron/scheduled.ts for weeklySortingCheckin() job
+ * @see shared/models.ts for IntentType, UserRow
  */
 
 import type { Env } from '../../shared/types';
-import type { UserRow, IntentType } from '../../shared/models';
+import type { UserRow, SubscriptionTier } from '../../shared/models';
 
 // ===========================================================================
 // Configuration
 // ===========================================================================
 
-/** Minimum days between sorting offers to the same user */
-const MIN_DAYS_BETWEEN_OFFERS = 7;
+/** Free tier limit: max contacts that can be sorted per week via SMS */
+const FREE_TIER_WEEKLY_SORT_LIMIT = 5;
 
-/** Maximum users to process per cron run (rate limiting) */
-const MAX_USERS_PER_RUN = 100;
+/** Minimum days between sorting offers (prevents spam) */
+const SORTING_OFFER_COOLDOWN_DAYS = 6;
 
-/** Free tier weekly sorting limit */
-const FREE_WEEKLY_SORTING_LIMIT = 5;
+/** Dashboard URL template for sorting */
+const DASHBOARD_SORT_URL = 'https://app.untitledpublishers.com/sort';
 
 // ===========================================================================
 // Types
 // ===========================================================================
 
 /**
- * Stats about a user's unsorted contacts.
+ * User eligible for a sorting check-in.
  */
-export interface UnsortedContactStats {
-  /** Contacts with intent = 'new' (never sorted) */
+export interface SortingCheckinCandidate {
+  userId: string;
+  phone: string;
+  name: string;
+  tier: SubscriptionTier;
   unsortedCount: number;
-  /** Contacts with no intent assigned (shouldn't happen but defensive) */
   noIntentCount: number;
-  /** Total needing attention */
-  totalNeedingSorting: number;
+  lastOffer: string | null;
 }
 
 /**
- * Result from processing sorting check-ins.
+ * Result of generating sorting check-ins.
  */
 export interface SortingCheckinResult {
-  usersProcessed: number;
+  usersChecked: number;
   checkInsSent: number;
-  usersSkipped: number;
+  skippedNoContacts: number;
+  skippedCooldown: number;
   errors: number;
 }
 
-/**
- * User eligible for sorting check-in.
- */
-interface EligibleUser {
-  id: string;
-  phone: string;
-  name: string;
-  subscriptionTier: string;
-  unsortedCount: number;
-  noIntentCount: number;
-}
-
 // ===========================================================================
-// Main Entry Point
+// Main Generation Function
 // ===========================================================================
 
 /**
- * Process weekly sorting check-ins for all eligible users.
+ * Generate and send sorting check-in messages for all eligible users.
  *
- * Called by the Monday cron job. Finds users with unsorted contacts
- * who haven't received a sorting offer in the past week, then sends
- * them a friendly check-in message.
+ * Called by the weekly cron job. For each user:
+ *   1. Check if they have unsorted contacts
+ *   2. Check if they're within cooldown period
+ *   3. Send personalized check-in message
+ *   4. Update last_sorting_offer timestamp
  *
- * @param env - Worker environment bindings
+ * @param db  - D1 database binding
+ * @param env - Worker environment with SendBlue credentials
  * @param now - Override current time (for testing)
  */
-export async function processWeeklySortingCheckins(
+export async function generateSortingCheckins(
+  db: D1Database,
   env: Env,
   now?: Date,
 ): Promise<SortingCheckinResult> {
   const currentTime = now ?? new Date();
-  const db = env.DB;
+  const cooldownCutoff = new Date(
+    currentTime.getTime() - SORTING_OFFER_COOLDOWN_DAYS * 24 * 60 * 60 * 1000
+  );
 
   const result: SortingCheckinResult = {
-    usersProcessed: 0,
+    usersChecked: 0,
     checkInsSent: 0,
-    usersSkipped: 0,
+    skippedNoContacts: 0,
+    skippedCooldown: 0,
     errors: 0,
   };
 
-  // Find eligible users
-  const eligibleUsers = await getEligibleUsers(db, currentTime, MAX_USERS_PER_RUN);
+  // Get users with unsorted contacts who haven't been offered recently
+  const candidates = await getSortingCandidates(db, cooldownCutoff);
+  result.usersChecked = candidates.length;
 
-  for (const user of eligibleUsers) {
-    result.usersProcessed++;
+  for (const candidate of candidates) {
+    // Skip if in cooldown
+    if (candidate.lastOffer && new Date(candidate.lastOffer) > cooldownCutoff) {
+      result.skippedCooldown++;
+      continue;
+    }
+
+    // Skip if no unsorted contacts
+    if (candidate.unsortedCount === 0 && candidate.noIntentCount === 0) {
+      result.skippedNoContacts++;
+      continue;
+    }
 
     try {
-      // Build and send the check-in message
-      const message = buildCheckinMessage(
-        user.name,
-        user.unsortedCount,
-        user.noIntentCount,
-        user.subscriptionTier,
-        env.DASHBOARD_URL ?? 'https://app.untitledpublishers.com',
-      );
-
-      // Send via SendBlue
-      const sent = await sendCheckinSms(env, user.phone, message);
-
-      if (sent) {
-        // Update last_sorting_offer timestamp
-        await db
-          .prepare(
-            `UPDATE users SET last_sorting_offer = ? WHERE id = ?`
-          )
-          .bind(currentTime.toISOString(), user.id)
-          .run();
-
-        result.checkInsSent++;
-      } else {
-        result.errors++;
-      }
+      await sendSortingCheckin(env, candidate);
+      await updateLastSortingOffer(db, candidate.userId, currentTime);
+      result.checkInsSent++;
     } catch (err) {
-      console.error(`[sorting-checkin] Error for user ${user.id}:`, err);
+      console.error(`[sorting:checkin] Failed for user ${candidate.userId}:`, err);
       result.errors++;
     }
   }
-
-  // Count skipped users (had unsorted but recently offered)
-  result.usersSkipped = await countRecentlyOfferedUsers(db, currentTime);
 
   return result;
 }
 
 // ===========================================================================
-// User Queries
+// Candidate Discovery
 // ===========================================================================
 
 /**
- * Find users eligible for a sorting check-in.
+ * Find users who are candidates for a sorting check-in.
  *
- * Criteria:
- *   - Has at least one contact with intent = 'new' OR no circles
- *   - Hasn't received a sorting offer in the past MIN_DAYS_BETWEEN_OFFERS days
- *   - Is not in onboarding (onboarding_stage is null)
+ * Returns users who:
+ *   - Have at least one contact with intent='new' (unsorted)
+ *   - OR have contacts without a clear intent assignment
+ *   - Have completed onboarding (onboarding_stage IS NULL or 'ready')
+ *   - Haven't been offered in the last SORTING_OFFER_COOLDOWN_DAYS
  */
-async function getEligibleUsers(
+async function getSortingCandidates(
   db: D1Database,
-  now: Date,
-  limit: number,
-): Promise<EligibleUser[]> {
-  const cutoffDate = new Date(now.getTime() - MIN_DAYS_BETWEEN_OFFERS * 24 * 60 * 60 * 1000);
-
-  // Query for users with unsorted contacts who haven't been offered recently
+  cooldownCutoff: Date,
+): Promise<SortingCheckinCandidate[]> {
   const { results } = await db
-    .prepare(`
-      SELECT 
-        u.id,
-        u.phone,
-        u.name,
-        u.subscription_tier as subscriptionTier,
-        (
-          SELECT COUNT(*)
-          FROM contacts c
-          WHERE c.user_id = u.id
-            AND c.archived = 0
-            AND c.intent = 'new'
-        ) as unsortedCount,
-        (
-          SELECT COUNT(*)
-          FROM contacts c
-          WHERE c.user_id = u.id
-            AND c.archived = 0
-            AND NOT EXISTS (
-              SELECT 1 FROM contact_circles cc WHERE cc.contact_id = c.id
-            )
-            AND c.intent != 'new'
-        ) as noIntentCount
-      FROM users u
-      WHERE u.onboarding_stage IS NULL
-        AND (u.last_sorting_offer IS NULL OR u.last_sorting_offer < ?)
-      HAVING unsortedCount > 0 OR noIntentCount > 0
-      LIMIT ?
-    `)
-    .bind(cutoffDate.toISOString(), limit)
-    .all<EligibleUser>();
+    .prepare(
+      `SELECT 
+         u.id as userId,
+         u.phone,
+         u.name,
+         u.subscription_tier as tier,
+         u.last_sorting_offer as lastOffer,
+         COUNT(CASE WHEN c.intent = 'new' THEN 1 END) as unsortedCount,
+         COUNT(CASE WHEN c.intent = 'new' AND (c.notes IS NULL OR c.notes = '') THEN 1 END) as noIntentCount
+       FROM users u
+       LEFT JOIN contacts c ON u.id = c.user_id AND c.archived = 0
+       WHERE (u.onboarding_stage IS NULL OR u.onboarding_stage = 'ready')
+         AND (u.last_sorting_offer IS NULL OR u.last_sorting_offer < ?)
+       GROUP BY u.id
+       HAVING unsortedCount > 0 OR noIntentCount > 0`
+    )
+    .bind(cooldownCutoff.toISOString())
+    .all<{
+      userId: string;
+      phone: string;
+      name: string;
+      tier: SubscriptionTier;
+      lastOffer: string | null;
+      unsortedCount: number;
+      noIntentCount: number;
+    }>();
 
-  return results;
-}
-
-/**
- * Count users who have unsorted contacts but were recently offered.
- */
-async function countRecentlyOfferedUsers(
-  db: D1Database,
-  now: Date,
-): Promise<number> {
-  const cutoffDate = new Date(now.getTime() - MIN_DAYS_BETWEEN_OFFERS * 24 * 60 * 60 * 1000);
-
-  const result = await db
-    .prepare(`
-      SELECT COUNT(DISTINCT u.id) as count
-      FROM users u
-      WHERE u.last_sorting_offer >= ?
-        AND EXISTS (
-          SELECT 1 FROM contacts c
-          WHERE c.user_id = u.id
-            AND c.archived = 0
-            AND (c.intent = 'new' OR NOT EXISTS (
-              SELECT 1 FROM contact_circles cc WHERE cc.contact_id = c.id
-            ))
-        )
-    `)
-    .bind(cutoffDate.toISOString())
-    .first<{ count: number }>();
-
-  return result?.count ?? 0;
+  return results.map((row) => ({
+    userId: row.userId,
+    phone: row.phone,
+    name: row.name,
+    tier: row.tier,
+    unsortedCount: row.unsortedCount,
+    noIntentCount: row.noIntentCount,
+    lastOffer: row.lastOffer,
+  }));
 }
 
 // ===========================================================================
-// Message Building
+// Message Generation & Sending
 // ===========================================================================
 
 /**
- * Build the sorting check-in message.
- *
- * Friendly, conversational tone. Offers choice of SMS or dashboard.
+ * Generate and send a sorting check-in message.
  */
-function buildCheckinMessage(
-  userName: string,
-  unsortedCount: number,
-  noIntentCount: number,
-  subscriptionTier: string,
-  dashboardUrl: string,
-): string {
-  const total = unsortedCount + noIntentCount;
-  const isFree = subscriptionTier === 'free';
-
-  // Build the counts description
-  let countsDescription: string;
-  if (unsortedCount > 0 && noIntentCount > 0) {
-    countsDescription = `${unsortedCount} contact${unsortedCount === 1 ? '' : 's'} I haven't placed yet, and ${noIntentCount} without a clear goal`;
-  } else if (unsortedCount > 0) {
-    countsDescription = `${unsortedCount} contact${unsortedCount === 1 ? '' : 's'} I haven't placed yet`;
-  } else {
-    countsDescription = `${noIntentCount} contact${noIntentCount === 1 ? '' : 's'} without a clear goal`;
-  }
-
-  // Opening line
-  let message = `Hey ${userName}! You've got ${countsDescription}. Want to sort through a few?`;
-
-  // Offer options
-  message += `\n\nYou can do it here by replying "sort" — or head to your dashboard: ${dashboardUrl}/contacts?filter=unsorted`;
-
-  // Free tier note
-  if (isFree && total > FREE_WEEKLY_SORTING_LIMIT) {
-    message += `\n\n(Free plan: ${FREE_WEEKLY_SORTING_LIMIT} contacts/week via text. Upgrade for unlimited sorting!)`;
-  }
-
-  return message;
-}
-
-// ===========================================================================
-// SMS Delivery
-// ===========================================================================
-
-/**
- * Send the check-in SMS via SendBlue.
- */
-async function sendCheckinSms(
+async function sendSortingCheckin(
   env: Env,
-  phone: string,
-  message: string,
-): Promise<boolean> {
-  try {
-    const response = await fetch('https://api.sendblue.co/api/send-message', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'sb-api-key-id': env.SENDBLUE_API_KEY,
-        'sb-api-secret-key': env.SENDBLUE_API_SECRET,
-      },
-      body: JSON.stringify({
-        number: phone,
-        content: message,
-        send_style: 'regular',
-      }),
-    });
+  candidate: SortingCheckinCandidate,
+): Promise<void> {
+  const message = generateSortingMessage(candidate);
 
-    if (!response.ok) {
-      console.error('[sorting-checkin] SendBlue error:', await response.text());
-      return false;
-    }
+  const response = await fetch('https://api.sendblue.co/api/send-message', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'sb-api-key-id': env.SENDBLUE_API_KEY,
+      'sb-api-secret-key': env.SENDBLUE_API_SECRET,
+    },
+    body: JSON.stringify({
+      number: candidate.phone,
+      content: message,
+      send_style: 'invisible',
+    }),
+  });
 
-    return true;
-  } catch (err) {
-    console.error('[sorting-checkin] SMS send failed:', err);
-    return false;
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`SendBlue error: ${error}`);
   }
 }
 
+/**
+ * Generate personalized sorting check-in message.
+ */
+function generateSortingMessage(candidate: SortingCheckinCandidate): string {
+  const { name, unsortedCount, noIntentCount, tier } = candidate;
+  const firstName = name.split(' ')[0];
+
+  // Determine what to highlight
+  const totalNeedingSorting = unsortedCount + noIntentCount;
+  const contactWord = totalNeedingSorting === 1 ? 'contact' : 'contacts';
+
+  // Build the message based on counts
+  let intro: string;
+  if (unsortedCount > 0 && noIntentCount > 0) {
+    intro = `Hey ${firstName}! You've got ${unsortedCount} ${contactWord} I haven't placed yet, and ${noIntentCount} without a clear goal.`;
+  } else if (unsortedCount > 0) {
+    intro = `Hey ${firstName}! You've got ${unsortedCount} ${contactWord} I haven't sorted yet.`;
+  } else {
+    intro = `Hey ${firstName}! I noticed ${noIntentCount} of your contacts could use a clearer relationship goal.`;
+  }
+
+  // Add tier-specific limit note for free users
+  let limitNote = '';
+  if (tier === 'free') {
+    limitNote = `\n\n(On the free plan, you can sort up to ${FREE_TIER_WEEKLY_SORT_LIMIT} contacts per week via text.)`;
+  }
+
+  // Call to action with both options
+  const cta = `\n\nWant to sort through a few? You can do it here via text, or head to your dashboard: ${DASHBOARD_SORT_URL}`;
+
+  return intro + cta + limitNote;
+}
+
 // ===========================================================================
-// Direct Query Helpers (for API/Dashboard use)
+// Database Updates
 // ===========================================================================
 
 /**
- * Get unsorted contact stats for a specific user.
- *
- * Used by the dashboard to show "X contacts need sorting" badges.
+ * Update the last_sorting_offer timestamp for a user.
  */
-export async function getUnsortedStats(
+async function updateLastSortingOffer(
   db: D1Database,
   userId: string,
-): Promise<UnsortedContactStats> {
-  const unsortedResult = await db
-    .prepare(`
-      SELECT COUNT(*) as count
-      FROM contacts
-      WHERE user_id = ? AND archived = 0 AND intent = 'new'
-    `)
-    .bind(userId)
-    .first<{ count: number }>();
+  now: Date,
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE users
+       SET last_sorting_offer = ?, updated_at = datetime('now')
+       WHERE id = ?`
+    )
+    .bind(now.toISOString(), userId)
+    .run();
+}
 
-  const noCirclesResult = await db
-    .prepare(`
-      SELECT COUNT(*) as count
-      FROM contacts c
-      WHERE c.user_id = ?
-        AND c.archived = 0
-        AND c.intent != 'new'
-        AND NOT EXISTS (
-          SELECT 1 FROM contact_circles cc WHERE cc.contact_id = c.id
-        )
-    `)
-    .bind(userId)
-    .first<{ count: number }>();
+// ===========================================================================
+// Utility Functions
+// ===========================================================================
 
-  const unsortedCount = unsortedResult?.count ?? 0;
-  const noIntentCount = noCirclesResult?.count ?? 0;
+/**
+ * Get the count of unsorted contacts for a specific user.
+ * Used by conversation handlers to show current state.
+ */
+export async function getUnsortedContactCount(
+  db: D1Database,
+  userId: string,
+): Promise<{ unsorted: number; noIntent: number }> {
+  const result = await db
+    .prepare(
+      `SELECT 
+         COUNT(CASE WHEN intent = 'new' THEN 1 END) as unsorted,
+         COUNT(CASE WHEN intent = 'new' AND (notes IS NULL OR notes = '') THEN 1 END) as noIntent
+       FROM contacts
+       WHERE user_id = ? AND archived = 0`
+    )
+    .bind(userId)
+    .first<{ unsorted: number; noIntent: number }>();
 
   return {
-    unsortedCount,
-    noIntentCount,
-    totalNeedingSorting: unsortedCount + noIntentCount,
+    unsorted: result?.unsorted ?? 0,
+    noIntent: result?.noIntent ?? 0,
   };
 }
 
 /**
- * Check if a user can sort more contacts this week (free tier limit).
- *
- * @param db     - D1 database binding
- * @param userId - The user's ID
- * @param now    - Override current time (for testing)
- * @returns Number of contacts they can still sort this week
+ * Get the weekly sorting limit for a user based on their tier.
+ * Free users: 5 contacts per week
+ * Premium/Trial: Unlimited
  */
-export async function getWeeklySortingQuota(
+export function getWeeklySortingLimit(tier: SubscriptionTier): number {
+  return tier === 'free' ? FREE_TIER_WEEKLY_SORT_LIMIT : Infinity;
+}
+
+/**
+ * Check if a user can sort more contacts this week.
+ * Tracks sorts via a usage counter pattern similar to other limits.
+ */
+export async function canSortMoreContacts(
   db: D1Database,
   userId: string,
+  tier: SubscriptionTier,
   now?: Date,
-): Promise<{ limit: number; used: number; remaining: number }> {
-  const currentTime = now ?? new Date();
-
-  // Get user's subscription tier
-  const user = await db
-    .prepare('SELECT subscription_tier FROM users WHERE id = ?')
-    .bind(userId)
-    .first<{ subscription_tier: string }>();
-
-  if (!user || user.subscription_tier !== 'free') {
-    // Premium/trial users have unlimited
-    return { limit: Infinity, used: 0, remaining: Infinity };
+): Promise<{ canSort: boolean; remaining: number; limit: number }> {
+  if (tier === 'premium' || tier === 'trial') {
+    return { canSort: true, remaining: Infinity, limit: Infinity };
   }
 
-  // Count contacts sorted this week (intent changed from 'new' in last 7 days)
-  // We track this by looking at contacts where updated_at is recent and intent != 'new'
-  // This is an approximation — a more accurate approach would be a dedicated tracking table
-  const weekStart = new Date(currentTime);
-  weekStart.setDate(weekStart.getDate() - 7);
+  const currentTime = now ?? new Date();
+  const weekStart = getWeekStart(currentTime);
 
-  const sortedThisWeek = await db
-    .prepare(`
-      SELECT COUNT(*) as count
-      FROM contacts
-      WHERE user_id = ?
-        AND intent != 'new'
-        AND source = 'import'
-        AND updated_at >= ?
-    `)
+  // Count how many contacts were sorted this week
+  // We'll track this by looking at contacts that transitioned from 'new'
+  // to another intent within the current week
+  const result = await db
+    .prepare(
+      `SELECT COUNT(*) as count
+       FROM contacts
+       WHERE user_id = ?
+         AND intent != 'new'
+         AND updated_at >= ?
+         AND source = 'sms_sort'`
+    )
     .bind(userId, weekStart.toISOString())
     .first<{ count: number }>();
 
-  const used = sortedThisWeek?.count ?? 0;
-  const remaining = Math.max(0, FREE_WEEKLY_SORTING_LIMIT - used);
+  const sorted = result?.count ?? 0;
+  const limit = FREE_TIER_WEEKLY_SORT_LIMIT;
+  const remaining = Math.max(0, limit - sorted);
 
   return {
-    limit: FREE_WEEKLY_SORTING_LIMIT,
-    used,
+    canSort: remaining > 0,
     remaining,
+    limit,
   };
 }
 
 /**
- * Mark that a user has been offered sorting (for manual triggers).
+ * Get the start of the current week (Monday 00:00:00 UTC).
  */
-export async function markSortingOffered(
-  db: D1Database,
-  userId: string,
-  now?: Date,
-): Promise<void> {
-  const currentTime = now ?? new Date();
-  await db
-    .prepare('UPDATE users SET last_sorting_offer = ? WHERE id = ?')
-    .bind(currentTime.toISOString(), userId)
-    .run();
+function getWeekStart(date: Date): Date {
+  const d = new Date(date);
+  const day = d.getUTCDay();
+  const diff = d.getUTCDate() - day + (day === 0 ? -6 : 1); // Monday
+  d.setUTCDate(diff);
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
 }
