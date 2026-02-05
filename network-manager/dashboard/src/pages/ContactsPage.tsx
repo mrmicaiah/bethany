@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useApi } from '../hooks/useApi';
+import { ExportModal } from '../components/ExportModal';
 import {
   Search,
   Filter,
@@ -95,6 +96,7 @@ export function ContactsPage() {
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showFilters, setShowFilters] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
 
   // Build API URL with filters
   const apiUrl = useMemo(() => {
@@ -142,16 +144,6 @@ export function ContactsPage() {
     }
   };
 
-  // Export handler
-  const handleExport = () => {
-    const params = new URLSearchParams();
-    if (circleFilter) params.set('circle_id', circleFilter);
-    if (intentFilter) params.set('intent', intentFilter);
-    if (healthFilter) params.set('health_status', healthFilter);
-    
-    window.location.href = `/api/export?${params.toString()}`;
-  };
-
   // Format date
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return 'Never';
@@ -167,6 +159,15 @@ export function ContactsPage() {
     return date.toLocaleDateString();
   };
 
+  // Current filters to pre-fill export modal
+  const currentExportFilters = useMemo(() => {
+    const filters: Record<string, string> = {};
+    if (circleFilter) filters.circle_id = circleFilter;
+    if (intentFilter) filters.intent = intentFilter;
+    if (healthFilter) filters.health_status = healthFilter;
+    return filters;
+  }, [circleFilter, intentFilter, healthFilter]);
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -179,7 +180,7 @@ export function ContactsPage() {
           </p>
         </div>
         <button
-          onClick={handleExport}
+          onClick={() => setShowExportModal(true)}
           className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
         >
           <Download className="w-4 h-4" />
@@ -369,6 +370,13 @@ export function ContactsPage() {
           </div>
         </div>
       )}
+
+      {/* Export Modal */}
+      <ExportModal
+        isOpen={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        currentFilters={currentExportFilters}
+      />
     </div>
   );
 }
