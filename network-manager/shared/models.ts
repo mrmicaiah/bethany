@@ -39,6 +39,14 @@ export type IntentType =
 export type HealthStatus = 'green' | 'yellow' | 'red';
 
 /**
+ * Contact kind — whether this person is family/kin or not.
+ * Kin relationships decay at ~50% the rate of friendships
+ * (Roberts & Dunbar 2011, 2015). Used by calculateHealthStatus()
+ * to apply kinDecayModifier from IntentConfig.
+ */
+export type ContactKind = 'kin' | 'non_kin';
+
+/**
  * Subscription tier — determines feature access and limits.
  */
 export type SubscriptionTier = 'free' | 'trial' | 'premium';
@@ -124,6 +132,7 @@ export interface ContactRow {
   health_status: HealthStatus;        // Computed, stored for query performance
   notes: string | null;               // Free-form notes about this person
   source: string | null;              // How they were added: 'onboarding', 'braindump', 'manual', 'import'
+  contact_kind: ContactKind;          // 'kin' or 'non_kin' — affects health decay rate
   archived: number;                   // 0 = active, 1 = archived (soft delete)
   created_at: string;
   updated_at: string;
@@ -237,6 +246,7 @@ export interface ContactSummary {
   intent: IntentType;
   health_status: HealthStatus;
   last_contact_date: string | null;
+  contact_kind: ContactKind;
   circles: Array<{ id: string; name: string }>;
 }
 
@@ -301,6 +311,7 @@ export interface ContactListFilters {
   circle_id?: string;
   intent?: IntentType;
   health_status?: HealthStatus;
+  contact_kind?: ContactKind;
   archived?: boolean;
   search?: string;           // Name search (LIKE query)
 }
@@ -315,6 +326,7 @@ export interface CreateContactInput {
   intent?: IntentType;       // Defaults to 'new'
   custom_cadence_days?: number;
   notes?: string;
+  contact_kind?: ContactKind; // Defaults to 'non_kin'
   circle_ids?: string[];     // Circles to link on creation
   source?: string;
 }
@@ -329,6 +341,7 @@ export interface UpdateContactInput {
   intent?: IntentType;
   custom_cadence_days?: number | null;
   notes?: string;
+  contact_kind?: ContactKind;
   archived?: boolean;
   circle_ids?: string[];     // Replaces all circle links if provided
 }

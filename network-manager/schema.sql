@@ -55,6 +55,7 @@ CREATE INDEX IF NOT EXISTS idx_users_subscription ON users(subscription_tier);
 -- A person in a user's network. Circles linked via contact_circles junction.
 -- health_status is denormalized — recalculated by weekly cron and on
 -- interaction logging.
+-- contact_kind drives kin decay modifiers (Roberts & Dunbar 2011, 2015).
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS contacts (
   id                  TEXT PRIMARY KEY,
@@ -70,6 +71,8 @@ CREATE TABLE IF NOT EXISTS contacts (
     CHECK (health_status IN ('green', 'yellow', 'red')),
   notes               TEXT,
   source              TEXT,
+  contact_kind        TEXT NOT NULL DEFAULT 'non_kin'
+    CHECK (contact_kind IN ('kin', 'non_kin')),
   archived            INTEGER NOT NULL DEFAULT 0,
   created_at          TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
@@ -94,6 +97,10 @@ CREATE INDEX IF NOT EXISTS idx_contacts_health_cadence
 -- Name search
 CREATE INDEX IF NOT EXISTS idx_contacts_user_name
   ON contacts(user_id, name COLLATE NOCASE);
+
+-- Kin filter: find all kin contacts for a user
+CREATE INDEX IF NOT EXISTS idx_contacts_user_kind
+  ON contacts(user_id, contact_kind) WHERE archived = 0;
 
 
 -- ---------------------------------------------------------------------------

@@ -20,7 +20,13 @@
  *   yellow = 1.0x–1.5x cadence elapsed (slipping)
  *   red    = >1.5x cadence elapsed (overdue)
  *
- * @see shared/models.ts for IntentType and HealthStatus type definitions
+ * Kin decay modifiers (Roberts & Dunbar 2011, 2015):
+ *   Kin relationships are resistant to decay — they maintain closeness even
+ *   with reduced contact frequency. The kinDecayModifier relaxes cadence
+ *   thresholds for kin contacts by multiplying yellow/red thresholds by
+ *   (1 + kinDecayModifier), giving family members more breathing room.
+ *
+ * @see shared/models.ts for IntentType, HealthStatus, and ContactKind type definitions
  */
 
 import type { IntentType, HealthStatus } from './models';
@@ -46,6 +52,21 @@ export interface IntentConfig {
   yellowThreshold: number;
   /** Fraction of cadence elapsed before red status */
   redThreshold: number;
+  /**
+   * Kin decay modifier — relaxes cadence thresholds for kin contacts.
+   * Applied as: effectiveThreshold = threshold * (1 + kinDecayModifier)
+   *
+   * Roberts & Dunbar (2011, 2015) showed kin relationships are "hardier" —
+   * they tolerate less frequent contact without closeness decay. Higher
+   * values = more tolerance for kin.
+   *
+   * Values per layer:
+   *   inner_circle:  0.5  (kin get 2x tolerance)
+   *   nurture:       0.5
+   *   maintain:      0.3
+   *   transactional: 0.2
+   */
+  kinDecayModifier: number;
   /** Nudge templates — Bethany picks from these when generating reminders */
   nudgeTemplates: NudgeTemplate[];
 }
@@ -71,6 +92,7 @@ export const INTENT_CONFIGS: Record<IntentType, IntentConfig> = {
     defaultCadenceDays: 7,
     yellowThreshold: 1.0,
     redThreshold: 1.5,
+    kinDecayModifier: 0.5,
     nudgeTemplates: [
       {
         trigger: 'yellow',
@@ -100,6 +122,7 @@ export const INTENT_CONFIGS: Record<IntentType, IntentConfig> = {
     defaultCadenceDays: 14,
     yellowThreshold: 1.0,
     redThreshold: 1.5,
+    kinDecayModifier: 0.5,
     nudgeTemplates: [
       {
         trigger: 'yellow',
@@ -129,6 +152,7 @@ export const INTENT_CONFIGS: Record<IntentType, IntentConfig> = {
     defaultCadenceDays: 30,
     yellowThreshold: 1.0,
     redThreshold: 1.5,
+    kinDecayModifier: 0.3,
     nudgeTemplates: [
       {
         trigger: 'yellow',
@@ -158,6 +182,7 @@ export const INTENT_CONFIGS: Record<IntentType, IntentConfig> = {
     defaultCadenceDays: 90,
     yellowThreshold: 1.0,
     redThreshold: 1.5,
+    kinDecayModifier: 0.2,
     nudgeTemplates: [
       {
         trigger: 'yellow',
@@ -179,6 +204,7 @@ export const INTENT_CONFIGS: Record<IntentType, IntentConfig> = {
     defaultCadenceDays: null,
     yellowThreshold: 1.0,
     redThreshold: 1.5,
+    kinDecayModifier: 0,
     nudgeTemplates: [],
     // No nudges — dormant contacts don't generate reminders
   },
@@ -192,6 +218,7 @@ export const INTENT_CONFIGS: Record<IntentType, IntentConfig> = {
     defaultCadenceDays: null,
     yellowThreshold: 1.0,
     redThreshold: 1.5,
+    kinDecayModifier: 0,
     nudgeTemplates: [
       {
         trigger: 'any',
@@ -213,18 +240,24 @@ export const INTENT_CONFIGS: Record<IntentType, IntentConfig> = {
  * @param lastContact  - ISO timestamp of the last interaction, or null
  * @param customCadenceDays - Optional override of the intent's default cadence
  * @param now          - Override current time (for testing)
+ * @param isKin        - If true, apply kinDecayModifier to relax thresholds.
+ *                       Kin relationships decay at ~50% the rate of friendships
+ *                       (Roberts & Dunbar 2011, 2015).
  * @returns HealthStatus: 'green', 'yellow', or 'red'
  *
  * Rules:
  *   - dormant and new contacts with no cadence are always 'green'
  *   - contacts with no lastContact date are 'yellow' (unknown state)
  *   - otherwise: days_elapsed / cadence compared against thresholds
+ *   - kin contacts: thresholds multiplied by (1 + kinDecayModifier)
+ *     e.g., inner_circle kin: yellow 1.0→1.5, red 1.5→2.25
  */
 export function calculateHealthStatus(
   intent: IntentType,
   lastContact: string | null,
   customCadenceDays?: number | null,
   now?: Date,
+  isKin?: boolean,
 ): HealthStatus {
   const config = INTENT_CONFIGS[intent];
   const cadence = customCadenceDays ?? config.defaultCadenceDays;
@@ -246,11 +279,16 @@ export function calculateHealthStatus(
 
   const ratio = elapsedDays / cadence;
 
-  if (ratio >= config.redThreshold) {
+  // Apply kin modifier: kin relationships get more breathing room
+  const kinMultiplier = isKin ? (1 + config.kinDecayModifier) : 1;
+  const effectiveYellow = config.yellowThreshold * kinMultiplier;
+  const effectiveRed = config.redThreshold * kinMultiplier;
+
+  if (ratio >= effectiveRed) {
     return 'red';
   }
 
-  if (ratio >= config.yellowThreshold) {
+  if (ratio >= effectiveYellow) {
     return 'yellow';
   }
 
@@ -276,12 +314,15 @@ export function getEffectiveCadence(
  * Returns null for dormant/new contacts with no cadence.
  *
  * Useful for scheduling nudge delivery at the right time.
+ *
+ * @param isKin - If true, apply kinDecayModifier to relax thresholds
  */
 export function daysUntilStatusChange(
   intent: IntentType,
   lastContact: string | null,
   customCadenceDays?: number | null,
   now?: Date,
+  isKin?: boolean,
 ): { daysUntilYellow: number | null; daysUntilRed: number | null } {
   const config = INTENT_CONFIGS[intent];
   const cadence = customCadenceDays ?? config.defaultCadenceDays;
@@ -295,8 +336,10 @@ export function daysUntilStatusChange(
   const elapsedMs = currentTime.getTime() - lastContactDate.getTime();
   const elapsedDays = elapsedMs / (1000 * 60 * 60 * 24);
 
-  const yellowAt = cadence * config.yellowThreshold;
-  const redAt = cadence * config.redThreshold;
+  // Apply kin modifier
+  const kinMultiplier = isKin ? (1 + config.kinDecayModifier) : 1;
+  const yellowAt = cadence * config.yellowThreshold * kinMultiplier;
+  const redAt = cadence * config.redThreshold * kinMultiplier;
 
   return {
     daysUntilYellow: Math.max(0, yellowAt - elapsedDays),
