@@ -15,7 +15,7 @@
  */
 
 // ===========================================================================
-// Enums & Literal Types
+// Enums &amp; Literal Types
 // ===========================================================================
 
 /**
@@ -43,8 +43,8 @@ export type HealthStatus = 'green' | 'yellow' | 'red';
  * Kin contacts receive relaxed cadence thresholds because research shows
  * family relationships resist decay even with reduced contact frequency.
  *
- * @see Roberts & Dunbar (2011). The costs of family and friends.
- * @see Roberts & Dunbar (2015). Managing relationship decay.
+ * @see Roberts &amp; Dunbar (2011). The costs of family and friends.
+ * @see Roberts &amp; Dunbar (2015). Managing relationship decay.
  */
 export type ContactKind = 'kin' | 'non_kin';
 
@@ -57,7 +57,7 @@ export type ContactKind = 'kin' | 'non_kin';
  * distinction: a research-backed default that improves the experience
  * for most people without being a hard rule.
  *
- * Research basis (Roberts & Dunbar 2011, 2015):
+ * Research basis (Roberts &amp; Dunbar 2011, 2015):
  *   - Women maintain relationships primarily through conversation
  *     frequency — more frequent check-ins, conversation-based nudges.
  *   - Men maintain relationships primarily through shared activities —
@@ -168,16 +168,22 @@ export type CircleType =
   | 'custom';    // User-created
 
 /**
- * Onboarding conversation stages — state machine for new user SMS flow.
- * Used by the onboarding handler (TASK-36776bae-4).
+ * Onboarding conversation stages — post-signup SMS flow state machine.
+ *
+ * Updated for web-first flow (TASK-36776bae-4). The old SMS-first stages
+ * (greeting, learn_name, send_signup_link) are removed. Signup now
+ * happens on the web form first, then Bethany texts to start onboarding.
+ *
+ * Flow: web signup → Bethany sends intro → user replies → conversation
+ *
+ * @see worker/services/onboarding-service.ts for the full state machine
  */
 export type OnboardingStage =
-  | 'greeting'
-  | 'learn_name'
-  | 'learn_circles'
-  | 'explain_value'
-  | 'send_signup_link'
-  | 'complete';
+  | 'intro_sent'        // Bethany's welcome message delivered after web signup
+  | 'user_replies'      // User responded, getting to know them
+  | 'learn_circles'     // Identifying key relationships and groups
+  | 'explain_features'  // Showing what Bethany can do
+  | 'ready';            // Onboarding complete, user is active
 
 /**
  * Pending signup token status.
@@ -223,6 +229,8 @@ export interface UserRow {
    * @see GENDER_MODIFIERS in shared/intent-config.ts
    */
   gender: UserGender;
+  /** Onboarding stage — tracks where the user is in the SMS onboarding flow. null = complete. */
+  onboarding_stage: OnboardingStage | null;
   created_at: string;            // ISO timestamp
   updated_at: string;            // ISO timestamp
 }
@@ -382,19 +390,32 @@ export interface UserWithSubscription extends UserRow {
 /**
  * Onboarding conversation state — stored in Durable Object.
  * Not persisted in D1; lives only during the onboarding flow.
+ *
+ * Updated for web-first flow (TASK-36776bae-4). Now includes userId
+ * (known from web signup), email, and richer people tracking.
+ *
+ * @see worker/services/onboarding-service.ts for OnboardingConversationState
+ *      which extends this with additional fields for the DO.
  */
 export interface OnboardingState {
   phone: string;
+  userId: string;                // Known from web signup
   stage: OnboardingStage;
-  name: string | null;
-  circles_discussed: string[];
+  name: string;                  // Known from web signup (not null anymore)
+  circlesDiscussed: string[];
+  peopleDiscussed: Array<{
+    name: string;
+    relationship?: string;
+    circle?: string;
+    notes?: string;
+  }>;
   messages: Array<{
     role: 'user' | 'bethany';
     content: string;
     timestamp: string;
   }>;
-  started_at: string;
-  last_message_at: string;
+  startedAt: string;
+  lastMessageAt: string;
 }
 
 /**
