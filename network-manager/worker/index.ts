@@ -2,6 +2,7 @@
  * Bethany Network Manager — Cloudflare Worker Entry Point
  *
  * Handles:
+ *   - Web signup (GET = page, POST = create account)
  *   - SMS webhook routing (inbound messages from SendBlue)
  *   - Dashboard API endpoints
  *   - Cron triggers for nudges and health checks
@@ -14,14 +15,15 @@
 import { Env } from '../shared/types';
 import { corsHeaders, jsonResponse, errorResponse } from '../shared/http';
 import { handleSmsWebhook } from './routes/sms';
+import { handleSignupPost, handleSignupPage } from './routes/signup';
 
 // Re-export Durable Object classes — Wrangler requires these at the entry point
 export { OnboardingDO } from './services/onboarding-service';
 
 const VERSION = {
-  version: '0.3.0',
+  version: '0.4.0',
   updated: '2026-02-05',
-  codename: 'onboarding',
+  codename: 'signup',
 };
 
 export default {
@@ -53,6 +55,19 @@ export default {
       }
 
       // ===========================================
+      // Web Signup (TASK-7cfa060a-2)
+      // ===========================================
+      if (url.pathname === '/signup') {
+        if (request.method === 'GET') {
+          return handleSignupPage();
+        }
+        if (request.method === 'POST') {
+          return handleSignupPost(request, env, ctx);
+        }
+        return errorResponse('Method not allowed', 405);
+      }
+
+      // ===========================================
       // SMS Webhook (SendBlue inbound)
       // ===========================================
       if (url.pathname === '/webhook/sms' && request.method === 'POST') {
@@ -76,14 +91,6 @@ export default {
           return errorResponse('Unauthorized', 401);
         }
         // TODO: TASK — Internal API routes
-        return errorResponse('Not implemented', 501);
-      }
-
-      // ===========================================
-      // Web Signup
-      // ===========================================
-      if (url.pathname === '/signup') {
-        // TODO: TASK — Web signup page (TASK-7cfa060a-2)
         return errorResponse('Not implemented', 501);
       }
 
