@@ -25,6 +25,10 @@ PRAGMA foreign_keys = ON;
 -- ---------------------------------------------------------------------------
 -- A registered person using the Network Manager.
 -- Created when a PendingSignup is converted via web signup.
+-- gender is optional (NULL = not set, no gender modifiers applied).
+-- When set, enables gender-aware cadence adjustments and nudge style
+-- preferences via GENDER_MODIFIERS in shared/intent-config.ts.
+-- @see Roberts & Dunbar (2011, 2015) for gender maintenance patterns.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (
   id                  TEXT PRIMARY KEY,
@@ -40,6 +44,8 @@ CREATE TABLE IF NOT EXISTS users (
     CHECK (subscription_tier IN ('free', 'trial', 'premium')),
   trial_ends_at       TEXT,
   stripe_customer_id  TEXT,
+  gender              TEXT DEFAULT NULL
+    CHECK (gender IS NULL OR gender IN ('male', 'female')),
   created_at          TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
