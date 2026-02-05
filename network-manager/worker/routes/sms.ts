@@ -6,18 +6,29 @@
  *   2. Normalize the phone number
  *   3. Look up the sender in D1
  *   4. Route to the correct handler:
- *      - New phone → onboarding flow
+ *      - Onboarding user → onboarding conversation flow
  *      - Existing user → main conversation handler
  *      - Locked account → locked account response
+ *      - Unknown phone → ignore (web signup is the entry point now)
  *   5. Return 200 quickly (actual processing via ctx.waitUntil)
  *
  * This is the single entry point for all inbound SMS traffic.
+ *
+ * FLOW CHANGE (TASK-36776bae-4):
+ *   The old SMS-first onboarding is gone. New users sign up on the web
+ *   form first, which creates their account and triggers Bethany's intro
+ *   message. The onboarding_new and onboarding_resume cases now handle
+ *   post-signup onboarding conversation, not pre-signup discovery.
+ *
+ *   Unknown phone numbers (no user record, no pending signup) are now
+ *   ignored — there's no SMS-first funnel anymore.
  */
 
 import type { Env } from '../../shared/types';
 import type { UserRow } from '../../shared/models';
 import { jsonResponse, errorResponse } from '../../shared/http';
-import { getUserByPhone, getActivePendingSignup, isAccountLocked } from '../services/user-service';
+import { getUserByPhone, isAccountLocked } from '../services/user-service';
+import { handleOnboardingMessage } from '../services/onboarding-service';
 
 // ---------------------------------------------------------------------------
 // SendBlue Payload Types
@@ -57,10 +68,10 @@ export interface NormalizedInboundMessage {
 // ---------------------------------------------------------------------------
 
 export type RoutingDecision =
-  | { action: 'onboarding_new'; phone: string; message: NormalizedInboundMessage }
-  | { action: 'onboarding_resume'; phone: string; pendingSignupId: string; message: NormalizedInboundMessage }
+  | { action: 'onboarding'; user: UserRow; message: NormalizedInboundMessage }
   | { action: 'conversation'; user: UserRow; message: NormalizedInboundMessage }
   | { action: 'account_locked'; user: UserRow; message: NormalizedInboundMessage }
+  | { action: 'unknown_phone'; phone: string; message: NormalizedInboundMessage }
   | { action: 'ignore'; reason: string };
 
 // ---------------------------------------------------------------------------
@@ -139,12 +150,13 @@ export function parseWebhookPayload(
 /**
  * Given a normalized inbound message, decide what to do with it.
  *
- * Decision tree:
+ * Decision tree (updated for web-first flow):
  *   1. Look up phone in users table
- *   2. If found → check if account is locked → route to conversation
- *   3. If not found → check for active pending signup
- *      a. If pending signup exists → resume onboarding
- *      b. If no pending signup → start fresh onboarding
+ *   2. If found:
+ *      a. Account locked → locked response
+ *      b. onboarding_stage is set (not null, not 'ready') → onboarding flow
+ *      c. Otherwise → main conversation handler
+ *   3. If not found → unknown phone (no action — web signup is entry point)
  */
 export async function routeInboundMessage(
   db: D1Database,
@@ -162,27 +174,20 @@ export async function routeInboundMessage(
       return { action: 'account_locked', user, message };
     }
 
-    // Step 2b: Route to main conversation handler
+    // Step 2b: Still in onboarding?
+    if (user.onboarding_stage && user.onboarding_stage !== 'ready') {
+      console.log(`[sms] Onboarding user: ${user.name} (${message.phone}), stage: ${user.onboarding_stage}`);
+      return { action: 'onboarding', user, message };
+    }
+
+    // Step 2c: Normal conversation
     console.log(`[sms] Existing user: ${user.name} (${message.phone})`);
     return { action: 'conversation', user, message };
   }
 
-  // Step 3: Not a registered user — check for in-progress onboarding
-  const pendingSignup = await getActivePendingSignup(db, message.phone);
-
-  if (pendingSignup) {
-    console.log(`[sms] Resuming onboarding for ${message.phone}`);
-    return {
-      action: 'onboarding_resume',
-      phone: message.phone,
-      pendingSignupId: pendingSignup.id,
-      message,
-    };
-  }
-
-  // Step 3b: Brand new phone number
-  console.log(`[sms] New phone number: ${message.phone}`);
-  return { action: 'onboarding_new', phone: message.phone, message };
+  // Step 3: Unknown phone — no SMS-first funnel anymore
+  console.log(`[sms] Unknown phone: ${message.phone} — ignoring (web signup required)`);
+  return { action: 'unknown_phone', phone: message.phone, message };
 }
 
 // ---------------------------------------------------------------------------
@@ -228,19 +233,46 @@ export async function handleSmsWebhook(
             console.log(`[sms] → conversation handler for ${decision.user.name}`);
             break;
 
-          case 'onboarding_new':
-            // TODO: TASK — Onboarding flow (TASK-36776bae-4)
-            console.log(`[sms] → new onboarding for ${decision.phone}`);
-            break;
+          case 'onboarding': {
+            // Post-signup onboarding conversation (TASK-36776bae-4)
+            console.log(`[sms] → onboarding for ${decision.user.name} (stage: ${decision.user.onboarding_stage})`);
+            try {
+              const result = await handleOnboardingMessage(
+                env,
+                decision.user.phone,
+                decision.message.body,
+                decision.user.id,
+              );
+              console.log(
+                `[sms] ← onboarding response sent. Stage: ${result.stage}, Complete: ${result.isComplete}`
+              );
 
-          case 'onboarding_resume':
-            // TODO: TASK — Onboarding flow (TASK-36776bae-4)
-            console.log(`[sms] → resume onboarding for ${decision.phone}`);
+              // Update onboarding_stage on user record
+              if (result.isComplete) {
+                await env.DB.prepare(
+                  `UPDATE users SET onboarding_stage = NULL, updated_at = datetime('now') WHERE id = ?`
+                ).bind(decision.user.id).run();
+              } else {
+                await env.DB.prepare(
+                  `UPDATE users SET onboarding_stage = ?, updated_at = datetime('now') WHERE id = ?`
+                ).bind(result.stage, decision.user.id).run();
+              }
+            } catch (err) {
+              console.error(`[sms] Onboarding error for ${decision.user.phone}:`, err);
+            }
             break;
+          }
 
           case 'account_locked':
             // TODO: TASK — Send locked account response via SendBlue
             console.log(`[sms] → account locked for ${decision.user.name}`);
+            break;
+
+          case 'unknown_phone':
+            // No action — web signup is the only entry point.
+            // Could optionally send a "sign up at [url]" message,
+            // but for now we stay silent to avoid spam concerns.
+            console.log(`[sms] → unknown phone ${decision.phone}, no action`);
             break;
 
           case 'ignore':
