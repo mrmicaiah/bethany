@@ -63,6 +63,7 @@ new_classes = ["IntentSortingDO"]
 # Job schedule:
 #   0 9 * * *   — Daily nudge generation for premium/trial users (3am Central)
 #   0 9 * * 1   — Weekly nudge generation for free users (Monday 3am Central)
+#   0 10 * * 1  — Weekly sorting check-in (Monday 4am Central)
 #   0 14 * * *  — Nudge delivery window (8am Central)
 #   0 0 * * *   — Midnight maintenance (trial expiration, usage cleanup)
 #   0 0 * * 0   — Weekly health recalculation (Sunday midnight)
@@ -73,6 +74,7 @@ new_classes = ["IntentSortingDO"]
 crons = [
   "0 9 * * *",   # Daily nudge generation (premium/trial)
   "0 9 * * 1",   # Weekly nudge generation (free tier, Monday only)
+  "0 10 * * 1",  # Weekly sorting check-in (Monday, 1hr after nudges)
   "0 14 * * *",  # Nudge delivery (morning window)
   "0 0 * * *",   # Midnight: trial expiration check + usage cleanup
   "0 0 * * 0",   # Sunday: weekly health recalculation
