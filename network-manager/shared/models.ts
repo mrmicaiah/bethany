@@ -49,6 +49,31 @@ export type HealthStatus = 'green' | 'yellow' | 'red';
 export type ContactKind = 'kin' | 'non_kin';
 
 /**
+ * User gender — optional, set during onboarding or in settings.
+ *
+ * Used to apply soft defaults for nudge cadence and style preferences.
+ * This is NOT prescriptive — it informs Bethany's suggestions, which
+ * the user can always override. Think of it like the kin/non-kin
+ * distinction: a research-backed default that improves the experience
+ * for most people without being a hard rule.
+ *
+ * Research basis (Roberts & Dunbar 2011, 2015):
+ *   - Women maintain relationships primarily through conversation
+ *     frequency — more frequent check-ins, conversation-based nudges.
+ *   - Men maintain relationships primarily through shared activities —
+ *     activity-based prompts, doing-things-together suggestions.
+ *   - Women tend to have slightly larger sympathy groups (Layer 2)
+ *     with more emotional depth per connection.
+ *   - Men tend to have larger but less intimate outer layers.
+ *
+ * null = not set (no gender modifiers applied).
+ *
+ * @see GenderModifiers in shared/intent-config.ts
+ * @see dunbar-cadence-research-findings.md, Section 4 (Relationship Decay Research)
+ */
+export type UserGender = 'male' | 'female' | null;
+
+/**
  * Drift severity — how far a contact's actual interaction frequency
  * has diverged from their assigned Dunbar layer.
  *
@@ -185,6 +210,19 @@ export interface UserRow {
   subscription_tier: SubscriptionTier;
   trial_ends_at: string | null;  // ISO timestamp — null if never trialed
   stripe_customer_id: string | null;
+  /**
+   * Optional gender — set during onboarding or in settings.
+   * When set, enables gender-aware nudge defaults via GenderModifiers
+   * in intent-config.ts. null = not set (no modifiers applied).
+   *
+   * This is opt-in and functions as a suggestion layer, not a hard
+   * rule. Users can override any cadence or nudge style preference
+   * regardless of this setting.
+   *
+   * @see UserGender type
+   * @see GENDER_MODIFIERS in shared/intent-config.ts
+   */
+  gender: UserGender;
   created_at: string;            // ISO timestamp
   updated_at: string;            // ISO timestamp
 }
