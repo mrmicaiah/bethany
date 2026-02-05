@@ -23,9 +23,9 @@ import { handleScheduled } from './cron/scheduled';
 export { OnboardingDO } from './services/onboarding-service';
 
 const VERSION = {
-  version: '0.6.0',
+  version: '0.7.0',
   updated: '2026-02-05',
-  codename: 'cron-jobs',
+  codename: 'proactive-nudges',
 };
 
 export default {
@@ -107,6 +107,14 @@ export default {
    *
    * Routes all cron events to the scheduled jobs module which dispatches
    * to individual job handlers based on the cron expression.
+   *
+   * Cron jobs:
+   *   - Daily nudge generation (3am Central) — premium/trial users
+   *   - Weekly nudge digest (Monday 3am Central) — free tier users
+   *   - Nudge delivery (8am Central) — sends pending nudges via SendBlue
+   *   - Trial expiration check (midnight) — downgrades expired trials
+   *   - Usage data cleanup (midnight) — purges old usage rows
+   *   - Health recalculation (Sunday midnight) — refreshes contact health
    *
    * @see worker/cron/scheduled.ts for job implementations
    * @see wrangler.toml [triggers] for cron expressions
