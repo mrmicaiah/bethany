@@ -10,11 +10,12 @@
 
 import { Env } from '../shared/types';
 import { corsHeaders, jsonResponse, errorResponse } from '../shared/http';
+import { handleSmsWebhook } from './routes/sms';
 
 const VERSION = {
-  version: '0.1.0',
+  version: '0.2.0',
   updated: '2026-02-05',
-  codename: 'scaffolding',
+  codename: 'routing',
 };
 
 export default {
@@ -49,8 +50,7 @@ export default {
       // SMS Webhook (SendBlue inbound)
       // ===========================================
       if (url.pathname === '/webhook/sms' && request.method === 'POST') {
-        // TODO: TASK — User identification & routing (TASK-7beb6fb9-a)
-        return jsonResponse({ received: true });
+        return handleSmsWebhook(request, env, ctx);
       }
 
       // ===========================================
