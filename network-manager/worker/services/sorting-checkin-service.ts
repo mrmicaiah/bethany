@@ -24,18 +24,16 @@
  * chooses to sort via SMS. This service only handles the proactive offer.
  *
  * @see worker/cron/scheduled.ts for weeklySortingCheckin() job
- * @see shared/models.ts for IntentType, UserRow
+ * @see shared/models.ts for IntentType, UserRow, FREE_TIER_LIMITS
  */
 
 import type { Env } from '../../shared/types';
-import type { UserRow, SubscriptionTier } from '../../shared/models';
+import type { SubscriptionTier } from '../../shared/models';
+import { FREE_TIER_LIMITS } from '../../shared/models';
 
 // ===========================================================================
 // Configuration
 // ===========================================================================
-
-/** Free tier limit: max contacts that can be sorted per week via SMS */
-const FREE_TIER_WEEKLY_SORT_LIMIT = 5;
 
 /** Minimum days between sorting offers (prevents spam) */
 const SORTING_OFFER_COOLDOWN_DAYS = 6;
@@ -231,6 +229,7 @@ async function sendSortingCheckin(
 function generateSortingMessage(candidate: SortingCheckinCandidate): string {
   const { name, unsortedCount, noIntentCount, tier } = candidate;
   const firstName = name.split(' ')[0];
+  const weeklyLimit = FREE_TIER_LIMITS.max_sorting_per_week;
 
   // Determine what to highlight
   const totalNeedingSorting = unsortedCount + noIntentCount;
@@ -249,7 +248,7 @@ function generateSortingMessage(candidate: SortingCheckinCandidate): string {
   // Add tier-specific limit note for free users
   let limitNote = '';
   if (tier === 'free') {
-    limitNote = `\n\n(On the free plan, you can sort up to ${FREE_TIER_WEEKLY_SORT_LIMIT} contacts per week via text.)`;
+    limitNote = `\n\n(On the free plan, you can sort up to ${weeklyLimit} contacts per week via text.)`;
   }
 
   // Call to action with both options
@@ -311,11 +310,11 @@ export async function getUnsortedContactCount(
 
 /**
  * Get the weekly sorting limit for a user based on their tier.
- * Free users: 5 contacts per week
+ * Free users: limited per week (see FREE_TIER_LIMITS)
  * Premium/Trial: Unlimited
  */
 export function getWeeklySortingLimit(tier: SubscriptionTier): number {
-  return tier === 'free' ? FREE_TIER_WEEKLY_SORT_LIMIT : Infinity;
+  return tier === 'free' ? FREE_TIER_LIMITS.max_sorting_per_week : Infinity;
 }
 
 /**
@@ -334,6 +333,7 @@ export async function canSortMoreContacts(
 
   const currentTime = now ?? new Date();
   const weekStart = getWeekStart(currentTime);
+  const weeklyLimit = FREE_TIER_LIMITS.max_sorting_per_week;
 
   // Count how many contacts were sorted this week
   // We'll track this by looking at contacts that transitioned from 'new'
@@ -351,13 +351,12 @@ export async function canSortMoreContacts(
     .first<{ count: number }>();
 
   const sorted = result?.count ?? 0;
-  const limit = FREE_TIER_WEEKLY_SORT_LIMIT;
-  const remaining = Math.max(0, limit - sorted);
+  const remaining = Math.max(0, weeklyLimit - sorted);
 
   return {
     canSort: remaining > 0,
     remaining,
-    limit,
+    limit: weeklyLimit,
   };
 }
 
