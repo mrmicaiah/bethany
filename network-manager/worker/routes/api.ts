@@ -13,7 +13,8 @@
  *   /api/braindump/*     — Parse natural language contact dumps
  *   /api/export/*        — CSV export with filters
  *   /api/user/*          — Profile read/update
- *   /api/subscription/*  — Tier info and checkout
+ *   /api/subscription/*  — Tier info, checkout, portal
+ *   /api/stripe/webhook  — Stripe webhook handler (no auth)
  *
  * Standard response format:
  *
@@ -21,6 +22,7 @@
  *   Error:   { error: "message", code?: "error_code" }
  *
  * @see worker/services/auth-service.ts for requireAuth(), withRefreshedSession()
+ * @see worker/services/stripe-service.ts for Stripe integration
  * @see shared/http.ts for jsonResponse(), errorResponse()
  */
 
@@ -63,6 +65,11 @@ import {
   getRecentInteractions,
 } from '../services/interaction-service';
 import { exportContacts, type ExportFilters } from '../services/export-service';
+import {
+  createCheckoutSession,
+  createPortalSession,
+  handleWebhook,
+} from '../services/stripe-service';
 import type {
   CreateContactInput,
   UpdateContactInput,
@@ -104,6 +111,11 @@ export async function handleApiRoute(
   }
   if (path === '/api/auth/me' && method === 'GET') {
     return handleGetMe(request, env);
+  }
+
+  // ─── Stripe webhook (unauthenticated, verified by signature) ─
+  if (path === '/api/stripe/webhook' && method === 'POST') {
+    return handleStripeWebhook(request, env);
   }
 
   // ─── All remaining routes require auth ──────────────────────
@@ -174,7 +186,9 @@ export async function handleApiRoute(
     } else if (path === '/api/subscription' && method === 'GET') {
       response = await handleGetSubscription(db, user.id);
     } else if (path === '/api/subscription/checkout' && method === 'POST') {
-      response = await handleCheckout(request, env, user.id);
+      response = await handleCheckout(request, env, auth.auth);
+    } else if (path === '/api/subscription/portal' && method === 'POST') {
+      response = await handlePortal(request, env, auth.auth);
 
     // ─── 404 ──────────────────────────────────────────────────
     } else {
@@ -660,13 +674,130 @@ async function handleGetSubscription(
   });
 }
 
+/**
+ * Create a Stripe Checkout session for upgrading to premium.
+ * Returns the checkout URL for client-side redirect.
+ */
 async function handleCheckout(
   request: Request,
   env: Env,
-  userId: string,
+  auth: AuthContext,
 ): Promise<Response> {
-  // TODO: TASK — Stripe checkout session creation
-  return errorResponse('Checkout not yet implemented', 501);
+  const { user } = auth;
+
+  // Already premium — no need to checkout
+  if (user.subscription_tier === 'premium') {
+    return errorResponse('Already subscribed to premium', 400, 'already_subscribed');
+  }
+
+  // Build redirect URLs
+  const dashboardUrl = env.DASHBOARD_URL || 'https://app.bethany.network';
+  const successUrl = `${dashboardUrl}/settings?upgrade=success`;
+  const cancelUrl = `${dashboardUrl}/settings?upgrade=cancelled`;
+
+  try {
+    const result = await createCheckoutSession(
+      env,
+      user.id,
+      user.email,
+      user.phone,
+      successUrl,
+      cancelUrl,
+      user.stripe_customer_id,
+    );
+
+    return jsonResponse({
+      data: {
+        checkoutUrl: result.url,
+        sessionId: result.sessionId,
+      },
+    });
+  } catch (err) {
+    console.error('[api] Checkout session creation failed:', err);
+    return errorResponse(
+      err instanceof Error ? err.message : 'Failed to create checkout session',
+      500,
+    );
+  }
+}
+
+/**
+ * Create a Stripe Customer Portal session for managing subscription.
+ * Only available for users with a Stripe customer ID.
+ */
+async function handlePortal(
+  request: Request,
+  env: Env,
+  auth: AuthContext,
+): Promise<Response> {
+  const { user } = auth;
+
+  if (!user.stripe_customer_id) {
+    return errorResponse('No active subscription to manage', 400, 'no_subscription');
+  }
+
+  const dashboardUrl = env.DASHBOARD_URL || 'https://app.bethany.network';
+  const returnUrl = `${dashboardUrl}/settings`;
+
+  try {
+    const result = await createPortalSession(env, user.stripe_customer_id, returnUrl);
+
+    return jsonResponse({
+      data: {
+        portalUrl: result.url,
+      },
+    });
+  } catch (err) {
+    console.error('[api] Portal session creation failed:', err);
+    return errorResponse(
+      err instanceof Error ? err.message : 'Failed to create portal session',
+      500,
+    );
+  }
+}
+
+// ===========================================================================
+// Stripe Webhook Handler
+// ===========================================================================
+
+/**
+ * Handle Stripe webhook events.
+ * This endpoint is unauthenticated but verified via Stripe signature.
+ */
+async function handleStripeWebhook(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const signature = request.headers.get('Stripe-Signature');
+  if (!signature) {
+    return errorResponse('Missing Stripe-Signature header', 400);
+  }
+
+  const payload = await request.text();
+
+  try {
+    const result = await handleWebhook(env, env.DB, payload, signature);
+
+    if (!result.success) {
+      console.error(`[stripe] Webhook processing failed: ${result.message}`);
+      // Return 200 anyway to acknowledge receipt (Stripe will retry on 4xx/5xx)
+      // Only return error for signature failures
+      if (result.message === 'Invalid webhook signature') {
+        return errorResponse('Invalid signature', 401);
+      }
+    }
+
+    return jsonResponse({
+      data: {
+        received: true,
+        eventType: result.eventType,
+        message: result.message,
+      },
+    });
+  } catch (err) {
+    console.error('[stripe] Webhook error:', err);
+    return errorResponse('Webhook processing failed', 500);
+  }
 }
 
 // ===========================================================================
