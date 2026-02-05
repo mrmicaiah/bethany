@@ -23,11 +23,12 @@ import { handleScheduled } from './cron/scheduled';
 export { OnboardingDO } from './services/onboarding-service';
 export { UserDiscoveryDO } from './services/user-discovery-service';
 export { NudgeContextDO } from './services/nudge-conversation-flow';
+export { IntentSortingDO } from './services/intent-assignment-flow';
 
 const VERSION = {
-  version: '0.9.0',
+  version: '0.10.0',
   updated: '2026-02-05',
-  codename: 'proactive-nudge-flow',
+  codename: 'intent-sorting',
 };
 
 export default {
