@@ -17,14 +17,15 @@ import { corsHeaders, jsonResponse, errorResponse } from '../shared/http';
 import { handleSmsWebhook } from './routes/sms';
 import { handleSignupPost, handleSignupPage } from './routes/signup';
 import { handleApiRoute } from './routes/api';
+import { handleScheduled } from './cron/scheduled';
 
 // Re-export Durable Object classes — Wrangler requires these at the entry point
 export { OnboardingDO } from './services/onboarding-service';
 
 const VERSION = {
-  version: '0.5.0',
+  version: '0.6.0',
   updated: '2026-02-05',
-  codename: 'dashboard-api',
+  codename: 'cron-jobs',
 };
 
 export default {
@@ -101,25 +102,16 @@ export default {
     }
   },
 
+  /**
+   * Scheduled event handler for Cloudflare Cron Triggers.
+   *
+   * Routes all cron events to the scheduled jobs module which dispatches
+   * to individual job handlers based on the cron expression.
+   *
+   * @see worker/cron/scheduled.ts for job implementations
+   * @see wrangler.toml [triggers] for cron expressions
+   */
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    const trigger = event.cron;
-
-    // Daily nudge generation (3am Central / 9am UTC)
-    if (trigger === '0 9 * * *') {
-      // TODO: TASK — Nudge generation cron
-      console.log('[cron] Nudge generation triggered');
-    }
-
-    // Morning delivery window (8am Central / 2pm UTC)
-    if (trigger === '0 14 * * *') {
-      // TODO: TASK — Nudge delivery cron
-      console.log('[cron] Nudge delivery triggered');
-    }
-
-    // Weekly health recalculation (Sunday midnight UTC)
-    if (trigger === '0 0 * * 0') {
-      // TODO: TASK — Health recalculation cron
-      console.log('[cron] Weekly health recalculation triggered');
-    }
+    ctx.waitUntil(handleScheduled(event, env, ctx));
   },
 };
