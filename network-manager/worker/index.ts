@@ -16,14 +16,15 @@ import { Env } from '../shared/types';
 import { corsHeaders, jsonResponse, errorResponse } from '../shared/http';
 import { handleSmsWebhook } from './routes/sms';
 import { handleSignupPost, handleSignupPage } from './routes/signup';
+import { handleApiRoute } from './routes/api';
 
 // Re-export Durable Object classes — Wrangler requires these at the entry point
 export { OnboardingDO } from './services/onboarding-service';
 
 const VERSION = {
-  version: '0.4.0',
+  version: '0.5.0',
   updated: '2026-02-05',
-  codename: 'signup',
+  codename: 'dashboard-api',
 };
 
 export default {
@@ -75,11 +76,10 @@ export default {
       }
 
       // ===========================================
-      // Dashboard API
+      // Dashboard API (TASK-c3d31ee9-3)
       // ===========================================
       if (url.pathname.startsWith('/api/')) {
-        // TODO: TASK — Dashboard routes
-        return errorResponse('Not implemented', 501);
+        return handleApiRoute(request, env, ctx);
       }
 
       // ===========================================
