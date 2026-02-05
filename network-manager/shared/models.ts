@@ -231,6 +231,14 @@ export interface UserRow {
   gender: UserGender;
   /** Onboarding stage — tracks where the user is in the SMS onboarding flow. null = complete. */
   onboarding_stage: OnboardingStage | null;
+  /**
+   * Last time we offered to help sort unsorted contacts.
+   * Used to avoid spamming users with weekly sorting check-ins.
+   * null = never offered.
+   *
+   * @see worker/services/sorting-checkin-service.ts
+   */
+  last_sorting_offer: string | null;
   created_at: string;            // ISO timestamp
   updated_at: string;            // ISO timestamp
 }
@@ -506,6 +514,7 @@ export const FREE_TIER_LIMITS = {
   max_messages_per_day: 10,
   max_braindumps_per_day: 1,
   max_nudges_per_day: 3,
+  max_sorting_per_week: 5,
 } as const;
 
 /**
