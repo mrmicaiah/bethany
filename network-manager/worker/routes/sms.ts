@@ -7,7 +7,7 @@
  *   3. Look up the sender in D1
  *   4. Route to the correct handler:
  *      - Onboarding user → onboarding conversation flow
- *      - Existing user → main conversation handler
+ *      - Existing user → conversation router (intent classification + dispatch)
  *      - Locked account → locked account response
  *      - Unknown phone → ignore (web signup is the entry point now)
  *   5. Return 200 quickly (actual processing via ctx.waitUntil)
@@ -22,6 +22,11 @@
  *
  *   Unknown phone numbers (no user record, no pending signup) are now
  *   ignored — there's no SMS-first funnel anymore.
+ *
+ * CONVERSATION ROUTING (TASK-b3480875-7):
+ *   Established users' messages now flow through the conversation router,
+ *   which uses Claude Haiku for intent classification and dispatches to
+ *   appropriate sub-handlers. Responses are sent back via SendBlue.
  */
 
 import type { Env } from '../../shared/types';
@@ -29,6 +34,7 @@ import type { UserRow } from '../../shared/models';
 import { jsonResponse, errorResponse } from '../../shared/http';
 import { getUserByPhone, isAccountLocked } from '../services/user-service';
 import { handleOnboardingMessage } from '../services/onboarding-service';
+import { routeConversation } from '../services/conversation-router';
 
 // ---------------------------------------------------------------------------
 // SendBlue Payload Types
@@ -191,6 +197,51 @@ export async function routeInboundMessage(
 }
 
 // ---------------------------------------------------------------------------
+// SendBlue Reply
+// ---------------------------------------------------------------------------
+
+/**
+ * Send an SMS reply via SendBlue API.
+ *
+ * Uses the SendBlue send message endpoint to deliver Bethany's response
+ * back to the user's phone number.
+ *
+ * @param phone   - The user's phone number (E.164 format)
+ * @param message - The text message to send
+ * @param env     - Environment bindings (needs SENDBLUE keys)
+ */
+async function sendSmsReply(
+  phone: string,
+  message: string,
+  env: Env,
+): Promise<void> {
+  try {
+    const response = await fetch('https://api.sendblue.co/api/send-message', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'sb-api-key-id': env.SENDBLUE_API_KEY,
+        'sb-api-secret-key': env.SENDBLUE_API_SECRET,
+      },
+      body: JSON.stringify({
+        number: phone,
+        content: message,
+        send_style: 'regular',
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      console.error(`[sms] SendBlue send failed (${response.status}):`, body);
+    } else {
+      console.log(`[sms] Reply sent to ${phone}: ${message.substring(0, 80)}...`);
+    }
+  } catch (err) {
+    console.error(`[sms] SendBlue send error for ${phone}:`, err);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Webhook Handler
 // ---------------------------------------------------------------------------
 
@@ -227,11 +278,45 @@ export async function handleSmsWebhook(
         const decision = await routeInboundMessage(env.DB, message);
 
         switch (decision.action) {
-          case 'conversation':
-            // TODO: TASK — Main conversation handler
-            // Forward to Bethany with user context
-            console.log(`[sms] → conversation handler for ${decision.user.name}`);
+          case 'conversation': {
+            // Main conversation handler — classify intent and dispatch
+            // (TASK-b3480875-7)
+            console.log(`[sms] → conversation router for ${decision.user.name}`);
+            try {
+              // TODO: Load pending context from user session state
+              // (stored in R2 or a Durable Object per user).
+              // For now, pass null — no multi-turn context.
+              const pendingContext = null;
+
+              const response = await routeConversation(
+                decision.message,
+                decision.user,
+                env,
+                pendingContext,
+              );
+
+              // Send Bethany's reply via SendBlue
+              await sendSmsReply(decision.user.phone, response.reply, env);
+
+              // TODO: If response.expectsReply && response.pendingContext,
+              // save the pending context to the user's session state so
+              // the next message can be interpreted in context.
+
+              console.log(
+                `[sms] ← conversation response sent to ${decision.user.name} ` +
+                `(expectsReply: ${response.expectsReply})`
+              );
+            } catch (err) {
+              console.error(`[sms] Conversation error for ${decision.user.phone}:`, err);
+              // Send a graceful error response so the user isn't left hanging
+              await sendSmsReply(
+                decision.user.phone,
+                "Sorry, I hit a bump processing that. Mind trying again in a moment?",
+                env,
+              );
+            }
             break;
+          }
 
           case 'onboarding': {
             // Post-signup onboarding conversation (TASK-36776bae-4)
@@ -264,8 +349,13 @@ export async function handleSmsWebhook(
           }
 
           case 'account_locked':
-            // TODO: TASK — Send locked account response via SendBlue
+            // Send a locked account response
             console.log(`[sms] → account locked for ${decision.user.name}`);
+            await sendSmsReply(
+              decision.user.phone,
+              "Your account has been locked for security. Please contact support to regain access.",
+              env,
+            );
             break;
 
           case 'unknown_phone':
