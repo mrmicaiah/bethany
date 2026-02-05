@@ -19,7 +19,7 @@ export interface Env {
   // Durable Objects
   ONBOARDING_DO: DurableObjectNamespace;
 
-  // Secrets
+  // Secrets — Core
   ANTHROPIC_API_KEY: string;
   SENDBLUE_API_KEY: string;
   SENDBLUE_API_SECRET: string;
@@ -27,11 +27,17 @@ export interface Env {
   PIN_SIGNING_SECRET: string;
   INTERNAL_API_KEY: string;
 
+  // Secrets — Stripe
+  STRIPE_SECRET_KEY: string;
+  STRIPE_WEBHOOK_SECRET: string;
+  STRIPE_PRICE_ID: string;
+
   // Vars
   ENVIRONMENT: string;
   BETHANY_WORKER_URL: string;
   MAX_FREE_CONTACTS: string; // wrangler vars are always strings
   TRIAL_DAYS: string;
+  DASHBOARD_URL: string; // URL for redirects after Stripe checkout
 }
 
 // ---------------------------------------------------------------------------
