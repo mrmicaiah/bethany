@@ -9,7 +9,7 @@
  *
  *   0 9 * * *    → dailyNudgeGeneration (3am Central) — premium users
  *   0 9 * * 1    → weeklyNudgeGeneration (Monday 3am Central) — free users
- *   0 9 * * 1    → weeklySortingCheckin (Monday 3am Central) — sorting offers
+ *   0 10 * * 1   → weeklySortingCheckin (Monday 4am Central) — sorting offers
  *   0 14 * * *   → nudgeDelivery (8am Central) — send pending nudges
  *   0 0 * * *    → trialExpirationCheck (midnight) — downgrade expired trials
  *   0 0 * * *    → usageDataCleanup (midnight) — purge old usage rows
@@ -25,7 +25,7 @@
  * @see worker/services/subscription-service.ts for processExpiredTrials()
  * @see worker/services/contact-service.ts for recalculateAllHealthStatuses()
  * @see worker/services/nudge-service.ts for nudge generation and delivery
- * @see worker/services/sorting-checkin-service.ts for weekly sorting check-ins
+ * @see worker/services/sorting-checkin-service.ts for weekly sorting offers
  */
 
 import type { Env } from '../../shared/types';
@@ -37,7 +37,7 @@ import {
   sendNudge,
   markNudgeDelivered,
 } from '../services/nudge-service';
-import { processWeeklySortingCheckins } from '../services/sorting-checkin-service';
+import { generateSortingCheckins } from '../services/sorting-checkin-service';
 
 // ===========================================================================
 // Types
@@ -84,9 +84,13 @@ export async function handleScheduled(
     results.push(await runJob('dailyNudgeGeneration', () => dailyNudgeGeneration(env)));
   }
 
-  // ─── 9am UTC Monday (3am Central Monday) — Free tier weekly nudges + sorting check-in ───
+  // ─── 9am UTC Monday (3am Central Monday) — Free tier weekly nudges ───
   if (trigger === '0 9 * * 1') {
     results.push(await runJob('weeklyNudgeGeneration', () => weeklyNudgeGeneration(env)));
+  }
+
+  // ─── 10am UTC Monday (4am Central Monday) — Weekly sorting check-in ───
+  if (trigger === '0 10 * * 1') {
     results.push(await runJob('weeklySortingCheckin', () => weeklySortingCheckin(env)));
   }
 
@@ -263,28 +267,34 @@ async function weeklyNudgeGeneration(env: Env): Promise<Record<string, unknown>>
 }
 
 /**
- * Weekly sorting check-in for users with unsorted contacts.
+ * Weekly sorting check-in for all users with unsorted contacts.
  *
- * Runs Monday 3am Central alongside weekly nudges. Finds users who have
- * contacts with intent='new' or no circles, and haven't been offered
- * sorting help in the past week.
+ * Runs Monday 4am Central (1 hour after nudge generation so messages
+ * are staggered). Prompts users who have contacts in the 'new' intent
+ * bucket to sort them, offering either SMS-based sorting or dashboard.
  *
- * Message format:
- *   "Hey [Name]! You've got X contacts I haven't placed yet, and Y without
- *   a clear goal. Want to sort through a few?
- *
- *   You can do it here by replying "sort" — or head to your dashboard: [link]"
+ * Smart offer conditions:
+ *   - Only users with unsorted contacts OR contacts without clear goals
+ *   - Only users who completed onboarding
+ *   - Only users not offered in the last 6 days (prevents spam)
  *
  * Tier limits:
- *   - Free: 5 contacts/week via SMS
- *   - Premium: Unlimited
+ *   - Free users: Can sort up to 5 contacts per week via SMS
+ *   - Premium/trial: Unlimited sorting
+ *
+ * Message format:
+ *   "Hey [name]! You've got [X] contacts I haven't placed yet, and [Y]
+ *    without a clear goal. Want to sort through a few? You can do it
+ *    here via text, or head to your dashboard: [link]"
  */
 async function weeklySortingCheckin(env: Env): Promise<Record<string, unknown>> {
-  const result = await processWeeklySortingCheckins(env);
+  const result = await generateSortingCheckins(env.DB, env);
+
   return {
-    usersProcessed: result.usersProcessed,
+    usersChecked: result.usersChecked,
     checkInsSent: result.checkInsSent,
-    usersSkipped: result.usersSkipped,
+    skippedNoContacts: result.skippedNoContacts,
+    skippedCooldown: result.skippedCooldown,
     errors: result.errors,
   };
 }
