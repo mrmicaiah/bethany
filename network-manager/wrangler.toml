@@ -28,6 +28,11 @@ class_name = "OnboardingDO"
 name = "USER_DISCOVERY_DO"
 class_name = "UserDiscoveryDO"
 
+# Pending nudge context for follow-up handling
+[[durable_objects.bindings]]
+name = "NUDGE_CONTEXT_DO"
+class_name = "NudgeContextDO"
+
 [[migrations]]
 tag = "v1"
 new_classes = ["OnboardingDO"]
@@ -35,6 +40,10 @@ new_classes = ["OnboardingDO"]
 [[migrations]]
 tag = "v2"
 new_classes = ["UserDiscoveryDO"]
+
+[[migrations]]
+tag = "v3"
+new_classes = ["NudgeContextDO"]
 
 # ===========================================================================
 # Cron Triggers — Scheduled Jobs
