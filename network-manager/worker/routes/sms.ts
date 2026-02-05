@@ -6,22 +6,22 @@
  *   2. Normalize the phone number
  *   3. Look up the sender in D1
  *   4. Route to the correct handler:
- *      - Onboarding user → onboarding conversation flow
+ *      - Unknown phone → user discovery flow (pre-signup)
+ *      - Active pending signup → resume discovery
+ *      - Onboarding user → onboarding conversation flow (post-signup)
  *      - Existing user → conversation router (intent classification + dispatch)
  *      - Locked account → locked account response
- *      - Unknown phone → ignore (web signup is the entry point now)
  *   5. Return 200 quickly (actual processing via ctx.waitUntil)
  *
  * This is the single entry point for all inbound SMS traffic.
  *
- * FLOW CHANGE (TASK-36776bae-4):
- *   The old SMS-first onboarding is gone. New users sign up on the web
- *   form first, which creates their account and triggers Bethany's intro
- *   message. The onboarding_new and onboarding_resume cases now handle
- *   post-signup onboarding conversation, not pre-signup discovery.
+ * FLOW (TASK-f25a28d1-1):
+ *   We now support BOTH entry paths:
+ *   - SMS-first: Unknown phone → discovery conversation → signup link → web form
+ *   - Web-first: Web signup → intro message → onboarding conversation
  *
- *   Unknown phone numbers (no user record, no pending signup) are now
- *   ignored — there's no SMS-first funnel anymore.
+ *   The discovery flow (user-discovery-service.ts) handles unknown numbers.
+ *   Once they complete web signup, they enter the onboarding flow.
  *
  * CONVERSATION ROUTING (TASK-b3480875-7):
  *   Established users' messages now flow through the conversation router,
@@ -32,8 +32,9 @@
 import type { Env } from '../../shared/types';
 import type { UserRow } from '../../shared/models';
 import { jsonResponse, errorResponse } from '../../shared/http';
-import { getUserByPhone, isAccountLocked } from '../services/user-service';
+import { getUserByPhone, getActivePendingSignup, isAccountLocked } from '../services/user-service';
 import { handleOnboardingMessage } from '../services/onboarding-service';
+import { handleDiscoveryMessage, hasActiveDiscovery, getDiscoveryState } from '../services/user-discovery-service';
 import { routeConversation } from '../services/conversation-router';
 
 // ---------------------------------------------------------------------------
@@ -74,10 +75,11 @@ export interface NormalizedInboundMessage {
 // ---------------------------------------------------------------------------
 
 export type RoutingDecision =
+  | { action: 'discovery'; phone: string; message: NormalizedInboundMessage }
+  | { action: 'pending_signup'; phone: string; pendingId: string; message: NormalizedInboundMessage }
   | { action: 'onboarding'; user: UserRow; message: NormalizedInboundMessage }
   | { action: 'conversation'; user: UserRow; message: NormalizedInboundMessage }
   | { action: 'account_locked'; user: UserRow; message: NormalizedInboundMessage }
-  | { action: 'unknown_phone'; phone: string; message: NormalizedInboundMessage }
   | { action: 'ignore'; reason: string };
 
 // ---------------------------------------------------------------------------
@@ -156,16 +158,20 @@ export function parseWebhookPayload(
 /**
  * Given a normalized inbound message, decide what to do with it.
  *
- * Decision tree (updated for web-first flow):
+ * Decision tree:
  *   1. Look up phone in users table
- *   2. If found:
+ *   2. If found (existing user):
  *      a. Account locked → locked response
  *      b. onboarding_stage is set (not null, not 'ready') → onboarding flow
  *      c. Otherwise → main conversation handler
- *   3. If not found → unknown phone (no action — web signup is entry point)
+ *   3. If not found (new potential user):
+ *      a. Check for active pending signup → pending_signup (resume discovery)
+ *      b. Check for active discovery conversation → discovery (continue)
+ *      c. Neither → discovery (start fresh)
  */
 export async function routeInboundMessage(
   db: D1Database,
+  env: Env,
   message: NormalizedInboundMessage,
 ): Promise<RoutingDecision> {
   // Step 1: Look up existing user
@@ -191,9 +197,23 @@ export async function routeInboundMessage(
     return { action: 'conversation', user, message };
   }
 
-  // Step 3: Unknown phone — no SMS-first funnel anymore
-  console.log(`[sms] Unknown phone: ${message.phone} — ignoring (web signup required)`);
-  return { action: 'unknown_phone', phone: message.phone, message };
+  // Step 3: Unknown phone — check for pending signup or discovery
+  const pendingSignup = await getActivePendingSignup(db, message.phone);
+  if (pendingSignup) {
+    console.log(`[sms] Pending signup found for ${message.phone} — resuming discovery`);
+    return { action: 'pending_signup', phone: message.phone, pendingId: pendingSignup.id, message };
+  }
+
+  // Check for active discovery conversation
+  const hasDiscovery = await hasActiveDiscovery(env, message.phone);
+  if (hasDiscovery) {
+    console.log(`[sms] Active discovery for ${message.phone} — continuing`);
+    return { action: 'discovery', phone: message.phone, message };
+  }
+
+  // New unknown phone — start discovery
+  console.log(`[sms] Unknown phone: ${message.phone} — starting discovery`);
+  return { action: 'discovery', phone: message.phone, message };
 }
 
 // ---------------------------------------------------------------------------
@@ -275,9 +295,35 @@ export async function handleSmsWebhook(
   ctx.waitUntil(
     (async () => {
       try {
-        const decision = await routeInboundMessage(env.DB, message);
+        const decision = await routeInboundMessage(env.DB, env, message);
 
         switch (decision.action) {
+          case 'discovery':
+          case 'pending_signup': {
+            // Pre-signup discovery flow (TASK-f25a28d1-1)
+            console.log(`[sms] → discovery for ${decision.phone}`);
+            try {
+              const result = await handleDiscoveryMessage(
+                env,
+                decision.phone,
+                decision.message.body,
+              );
+              console.log(
+                `[sms] ← discovery response sent. Stage: ${result.stage}, ` +
+                `SignupUrl: ${result.signupUrl ? 'generated' : 'none'}`
+              );
+            } catch (err) {
+              console.error(`[sms] Discovery error for ${decision.phone}:`, err);
+              // Send a graceful error response
+              await sendSmsReply(
+                decision.phone,
+                "Hey! I hit a snag there. Mind texting me again?",
+                env,
+              );
+            }
+            break;
+          }
+
           case 'conversation': {
             // Main conversation handler — classify intent and dispatch
             // (TASK-b3480875-7)
@@ -356,13 +402,6 @@ export async function handleSmsWebhook(
               "Your account has been locked for security. Please contact support to regain access.",
               env,
             );
-            break;
-
-          case 'unknown_phone':
-            // No action — web signup is the only entry point.
-            // Could optionally send a "sign up at [url]" message,
-            // but for now we stay silent to avoid spam concerns.
-            console.log(`[sms] → unknown phone ${decision.phone}, no action`);
             break;
 
           case 'ignore':
