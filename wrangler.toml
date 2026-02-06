@@ -24,9 +24,9 @@ class_name = "Bethany"
 tag = "v1"
 new_sqlite_classes = ["Bethany"]
 
-# Scheduled triggers - runs every hour
-[triggers]
-crons = ["0 * * * *"]
+# Cron triggers moved to network-manager worker
+# [triggers]
+# crons = ["0 * * * *"]
 
 [vars]
 # Non-secret config can go here
